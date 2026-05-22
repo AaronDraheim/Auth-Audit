@@ -112,14 +112,53 @@ function Get-SecurityQuestionSignal {
     }
 }
 
+function Resolve-AuthMethodName {
+    param(
+        [string]$Method
+    )
+
+    switch ($Method) {
+        'push'                 { return 'Microsoft Authenticator notification' }
+        'sms'                  { return 'SMS' }
+        'voiceMobile'          { return 'Phone call (mobile)' }
+        'voiceAlternateMobile' { return 'Phone call (alternate mobile)' }
+        'voiceOffice'          { return 'Phone call (office)' }
+        'oath'                 { return 'OATH token' }
+        'unknownFutureValue'   { return 'Unknown future value' }
+        'Unavailable'          { return 'Unavailable' }
+        default                { return $Method }
+    }
+}
+
+function Get-SampleSize {
+    while ($true) {
+        $inputValue = Read-Host "Enter number of users to sample"
+
+        if ([string]::IsNullOrWhiteSpace($inputValue)) {
+            Write-Host "A value is required." -ForegroundColor Red
+            continue
+        }
+
+        $parsedValue = 0
+        if ([int]::TryParse($inputValue, [ref]$parsedValue) -and $parsedValue -gt 0) {
+            return $parsedValue
+        }
+
+        Write-Host "Enter a whole number greater than 0." -ForegroundColor Red
+    }
+}
+
 function Export-AuditResults {
     param(
         [Parameter(Mandatory = $true)]
         [System.Collections.IEnumerable]$Results,
 
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Top10','Full')]
-        [string]$Mode
+        [string]$ModeLabel,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Enabled','All')]
+        [string]$AccountScope
     )
 
     if (-not (Test-Path $OutputFolder)) {
@@ -127,14 +166,16 @@ function Export-AuditResults {
     }
 
     $timestamp = Get-Date -Format 'yyyyMMdd_HHmm'
+    $safeModeLabel = $ModeLabel -replace '[^A-Za-z0-9]', ''
+    $baseName = "AuthAudit_${AccountScope}_${safeModeLabel}_$timestamp"
 
     if ($UseExcel) {
-        $xlsxPath = Join-Path $OutputFolder "AuthAudit_${Mode}_$timestamp.xlsx"
+        $xlsxPath = Join-Path $OutputFolder "$baseName.xlsx"
 
         $Results | Export-Excel `
             -Path $xlsxPath `
             -WorksheetName 'AuditResults' `
-            -TableName "AuthAudit$Mode" `
+            -TableName ("AuthAudit{0}{1}" -f $AccountScope, $safeModeLabel) `
             -TableStyle Medium6 `
             -AutoSize `
             -FreezeTopRow `
@@ -143,14 +184,14 @@ function Export-AuditResults {
         Write-Host "`nExported Excel: $xlsxPath" -ForegroundColor Green
     }
     else {
-        $csvPath = Join-Path $OutputFolder "AuthAudit_${Mode}_$timestamp.csv"
+        $csvPath = Join-Path $OutputFolder "$baseName.csv"
 
         $Results | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
 
         Write-Host "`nImportExcel module not found. Exported CSV instead: $csvPath" -ForegroundColor Yellow
     }
 
-    $txtPath = Join-Path $OutputFolder "AuthAudit_${Mode}_$timestamp.txt"
+    $txtPath = Join-Path $OutputFolder "$baseName.txt"
     $Results | Format-List * | Out-String -Width 4096 | Set-Content -Path $txtPath -Encoding UTF8
     Write-Host "Exported text: $txtPath" -ForegroundColor Green
 }
@@ -213,6 +254,74 @@ function Get-PerUserMfaState {
     }
 }
 
+function Get-UserSignInMethodView {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$UserId
+    )
+
+    $result = [PSCustomObject]@{
+        SignInMode              = 'Unknown'
+        UserDefaultSignInMethod = 'Unavailable'
+        SystemPreferredEnabled  = $null
+    }
+
+    try {
+        $prefs = Invoke-MgGraphRequest `
+            -Method GET `
+            -Uri "https://graph.microsoft.com/beta/users/$UserId/authentication/signInPreferences" `
+            -OutputType PSObject `
+            -ErrorAction Stop
+
+        $isSystemPreferred = $null
+        $userMethod = $null
+
+        if ($prefs.PSObject.Properties.Name -contains 'isSystemPreferredAuthenticationMethodEnabled') {
+            $isSystemPreferred = $prefs.isSystemPreferredAuthenticationMethodEnabled
+        }
+        elseif ($prefs.PSObject.Properties.Name -contains 'IsSystemPreferredAuthenticationMethodEnabled') {
+            $isSystemPreferred = $prefs.IsSystemPreferredAuthenticationMethodEnabled
+        }
+        elseif ($prefs.PSObject.Properties.Name -contains 'AdditionalProperties' -and
+                $null -ne $prefs.AdditionalProperties -and
+                $prefs.AdditionalProperties.ContainsKey('isSystemPreferredAuthenticationMethodEnabled')) {
+            $isSystemPreferred = $prefs.AdditionalProperties['isSystemPreferredAuthenticationMethodEnabled']
+        }
+
+        if ($prefs.PSObject.Properties.Name -contains 'userPreferredMethodForSecondaryAuthentication') {
+            $userMethod = $prefs.userPreferredMethodForSecondaryAuthentication
+        }
+        elseif ($prefs.PSObject.Properties.Name -contains 'UserPreferredMethodForSecondaryAuthentication') {
+            $userMethod = $prefs.UserPreferredMethodForSecondaryAuthentication
+        }
+        elseif ($prefs.PSObject.Properties.Name -contains 'AdditionalProperties' -and
+                $null -ne $prefs.AdditionalProperties -and
+                $prefs.AdditionalProperties.ContainsKey('userPreferredMethodForSecondaryAuthentication')) {
+            $userMethod = $prefs.AdditionalProperties['userPreferredMethodForSecondaryAuthentication']
+        }
+
+        if ($null -ne $isSystemPreferred) {
+            $result.SystemPreferredEnabled = [bool]$isSystemPreferred
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace([string]$userMethod)) {
+            $result.UserDefaultSignInMethod = Resolve-AuthMethodName -Method ([string]$userMethod)
+        }
+
+        if ($isSystemPreferred -eq $true) {
+            $result.SignInMode = 'SystemPreferred'
+        }
+        elseif ($null -ne $isSystemPreferred -and $isSystemPreferred -eq $false) {
+            $result.SignInMode = 'UserPreferred'
+        }
+    }
+    catch {
+        # keep defaults
+    }
+
+    return $result
+}
+
 function Get-UserPhoneMethods {
     param(
         [Parameter(Mandatory = $true)]
@@ -229,16 +338,23 @@ function Get-UserPhoneMethods {
 
 function Run-Audit {
     param(
-        [ValidateSet('Top10','Full')]
-        [string]$Mode
+        [ValidateSet('Sample','Full')]
+        [string]$Mode,
+
+        [ValidateSet('Enabled','All')]
+        [string]$AccountScope,
+
+        [int]$SampleSize = 0
     )
 
     if (-not (Test-GraphConnection)) {
         return
     }
 
-    Write-Host "`nStarting $Mode audit..." -ForegroundColor Cyan
-    Write-Host "Retrieving registration report..." -ForegroundColor Cyan
+    $modeLabel = if ($Mode -eq 'Sample') { "Sample$SampleSize" } else { 'Full' }
+
+    Write-Host "`nStarting $modeLabel audit for $AccountScope accounts..." -ForegroundColor Cyan
+    Write-Progress -Activity "Preparing Audit" -Status "Retrieving authentication registration report..." -PercentComplete 5
 
     $registrationLookup = @{}
     try {
@@ -249,26 +365,33 @@ function Run-Audit {
     }
     catch {
         Write-Host "Failed to retrieve registration report: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Progress -Activity "Preparing Audit" -Completed
         return
     }
 
-    Write-Host "Retrieving users..." -ForegroundColor Cyan
+    Write-Progress -Activity "Preparing Audit" -Status "Retrieving users..." -PercentComplete 15
+
     try {
         $users = @(Get-MgUser -All -Property Id,DisplayName,UserPrincipalName,Mail,AccountEnabled -ErrorAction Stop)
-        $users = $users | Where-Object { $_.AccountEnabled -eq $true }
+
+        if ($AccountScope -eq 'Enabled') {
+            $users = $users | Where-Object { $_.AccountEnabled -eq $true }
+        }
     }
     catch {
         Write-Host "Failed to retrieve users: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Progress -Activity "Preparing Audit" -Completed
         return
     }
 
-    if ($Mode -eq 'Top10') {
-        $users = $users | Select-Object -First 10
+    if ($Mode -eq 'Sample') {
+        $users = $users | Select-Object -First $SampleSize
     }
 
     $total = @($users).Count
     if ($total -eq 0) {
         Write-Host "No users found to process." -ForegroundColor Yellow
+        Write-Progress -Activity "Preparing Audit" -Completed
         return
     }
 
@@ -277,27 +400,33 @@ function Run-Audit {
 
     foreach ($user in $users) {
         $counter++
+        $percent = [math]::Round(15 + (($counter / $total) * 85), 0)
 
-        # Simple status output instead of Write-Progress
-        if ($Mode -eq 'Top10' -or $counter -eq 1 -or $counter % 25 -eq 0 -or $counter -eq $total) {
-            Write-Host ("Processing {0} of {1}: {2}" -f $counter, $total, $user.UserPrincipalName) -ForegroundColor DarkCyan
-        }
+        Write-Progress `
+            -Activity "Auditing Users ($AccountScope / $modeLabel)" `
+            -Status "$counter of $total processed" `
+            -PercentComplete $percent
 
         $reg = $null
         if ($registrationLookup.ContainsKey($user.Id)) {
             $reg = $registrationLookup[$user.Id]
         }
 
-        $mfaState = Get-PerUserMfaState -UserId $user.Id
-        $phones   = Get-UserPhoneMethods -UserId $user.Id
-        $modernSQ = Get-ModernSecurityQuestionPresence -UserId $user.Id
-        $signal   = Get-SecurityQuestionSignal -RegistrationRecord $reg -ModernSecurityQuestionFound $modernSQ
+        $mfaState   = Get-PerUserMfaState -UserId $user.Id
+        $phones     = Get-UserPhoneMethods -UserId $user.Id
+        $modernSQ   = Get-ModernSecurityQuestionPresence -UserId $user.Id
+        $signal     = Get-SecurityQuestionSignal -RegistrationRecord $reg -ModernSecurityQuestionFound $modernSQ
+        $signInView = Get-UserSignInMethodView -UserId $user.Id
 
         if (-not $phones -or @($phones).Count -eq 0) {
             $results.Add([PSCustomObject]@{
                 UserPrincipalName       = $user.UserPrincipalName
                 Email                   = $user.Mail
+                AccountEnabled          = $user.AccountEnabled
                 PerUserMfaState         = $mfaState
+                SignInMode              = $signInView.SignInMode
+                UserDefaultSignInMethod = $signInView.UserDefaultSignInMethod
+                SystemPreferredEnabled  = $signInView.SystemPreferredEnabled
                 IsMfaRegistered         = if ($null -ne $reg) { $reg.IsMfaRegistered } else { $null }
                 IsSsprRegistered        = if ($null -ne $reg) { $reg.IsSsprRegistered } else { $null }
                 SecurityQuestionSignals = $signal
@@ -317,7 +446,11 @@ function Run-Audit {
                 $results.Add([PSCustomObject]@{
                     UserPrincipalName       = $user.UserPrincipalName
                     Email                   = $user.Mail
+                    AccountEnabled          = $user.AccountEnabled
                     PerUserMfaState         = $mfaState
+                    SignInMode              = $signInView.SignInMode
+                    UserDefaultSignInMethod = $signInView.UserDefaultSignInMethod
+                    SystemPreferredEnabled  = $signInView.SystemPreferredEnabled
                     IsMfaRegistered         = if ($null -ne $reg) { $reg.IsMfaRegistered } else { $null }
                     IsSsprRegistered        = if ($null -ne $reg) { $reg.IsSsprRegistered } else { $null }
                     SecurityQuestionSignals = $signal
@@ -328,15 +461,46 @@ function Run-Audit {
         }
     }
 
+    Write-Progress -Activity "Auditing Users" -Completed
+
     $sorted = $results | Sort-Object UserPrincipalName, PhoneType
-
-    Write-Host "`nResults:" -ForegroundColor Cyan
-    $sorted | Format-Table -AutoSize
-
-    # Always export, including Top10
-    Export-AuditResults -Results $sorted -Mode $Mode
+    Export-AuditResults -Results $sorted -ModeLabel $modeLabel -AccountScope $AccountScope
 
     Write-Host "`nAudit complete." -ForegroundColor Green
+}
+
+function Show-AuditSubMenu {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Enabled','All')]
+        [string]$AccountScope
+    )
+
+    while ($true) {
+        Write-Host ""
+        Write-Host "===== $AccountScope ACCOUNTS MENU =====" -ForegroundColor Cyan
+        Write-Host "1. Sample Results (prompt for count)"
+        Write-Host "2. Full Tenant Audit"
+        Write-Host "B. Back"
+
+        $subChoice = Read-Host "Select an option"
+
+        switch ($subChoice.ToUpper()) {
+            '1' {
+                $sampleSize = Get-SampleSize
+                Run-Audit -Mode 'Sample' -AccountScope $AccountScope -SampleSize $sampleSize
+            }
+            '2' {
+                Run-Audit -Mode 'Full' -AccountScope $AccountScope
+            }
+            'B' {
+                break
+            }
+            default {
+                Write-Host "Invalid selection." -ForegroundColor Red
+            }
+        }
+    }
 }
 
 # =========================
@@ -345,8 +509,8 @@ function Run-Audit {
 while ($true) {
     Write-Host "`n===== MAIN MENU =====" -ForegroundColor Cyan
     Write-Host "1. Disconnect / Reconnect Microsoft Graph"
-    Write-Host "2. Top 10 Results"
-    Write-Host "3. Full Tenant Audit"
+    Write-Host "2. Audit Enabled Accounts"
+    Write-Host "3. Audit All Accounts"
     Write-Host "Q. Quit"
 
     $choice = Read-Host "Select an option"
@@ -356,10 +520,10 @@ while ($true) {
             Connect-GraphSession
         }
         '2' {
-            Run-Audit -Mode 'Top10'
+            Show-AuditSubMenu -AccountScope 'Enabled'
         }
         '3' {
-            Run-Audit -Mode 'Full'
+            Show-AuditSubMenu -AccountScope 'All'
         }
         'Q' {
             Disconnect-GraphSession
