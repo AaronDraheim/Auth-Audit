@@ -135,13 +135,13 @@ function Get-SampleSize {
     while ($true) {
         $inputValue = Read-Host "Enter number of users to sample"
 
-        if (:IsNullOrWhiteSpace($inputValue)) {
+        if ([string]::IsNullOrWhiteSpace($inputValue)) {
             Write-Host "A value is required." -ForegroundColor Red
             continue
         }
 
         $parsedValue = 0
-        if (:TryParse($inputValue, [ref]$parsedValue) -and $parsedValue -gt 0) {
+        if ([int]::TryParse($inputValue, [ref]$parsedValue) -and $parsedValue -gt 0) {
             return $parsedValue
         }
 
@@ -159,13 +159,13 @@ function Get-DomainFilter {
         Write-Host "  *   (all domains / no filter)"
         $inputValue = Read-Host "Enter UPN domain filter"
 
-        if (:IsNullOrWhiteSpace($inputValue) -or $inputValue -eq '*') {
+        if ([string]::IsNullOrWhiteSpace($inputValue) -or $inputValue -eq '*') {
             return @()
         }
 
         $domains = $inputValue.Split(',') |
             ForEach-Object { $_.Trim().ToLowerInvariant() } |
-            Where-Object { -not :IsNullOrWhiteSpace($_) } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Sort-Object -Unique
 
         if (@($domains).Count -gt 0) {
@@ -295,7 +295,7 @@ function Get-UserAuthMethodInventory {
                         $smsState = [string]$method.SmsSignInState
                     }
 
-                    if (-not :IsNullOrWhiteSpace($phoneType)) {
+                    if (-not [string]::IsNullOrWhiteSpace($phoneType)) {
                         $methodNames.Add("Phone ($phoneType)")
                         $voiceEnabled = $true
                     }
@@ -394,7 +394,7 @@ function Get-UserSignInMethodView {
             $result.SystemPreferredEnabled = [bool]$isSystemPreferred
         }
 
-        if (-not :IsNullOrWhiteSpace([string]$userMethod)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$userMethod)) {
             $result.UserDefaultSignInMethod = Resolve-AuthMethodName -Method ([string]$userMethod)
         }
 
@@ -480,7 +480,7 @@ function Run-Audit {
         if (@($DomainFilter).Count -gt 0) {
             $users = $users | Where-Object {
                 $upnDomain = $null
-                if (-not :IsNullOrWhiteSpace($_.UserPrincipalName) -and $_.UserPrincipalName -match '@') {
+                if (-not [string]::IsNullOrWhiteSpace($_.UserPrincipalName) -and $_.UserPrincipalName -match '@') {
                     $upnDomain = ($_.UserPrincipalName.Split('@')[-1]).ToLowerInvariant()
                 }
                 $upnDomain -in $DomainFilter
@@ -509,7 +509,7 @@ function Run-Audit {
 
     foreach ($user in $users) {
         $counter++
-        $percent = :Round(15 + (($counter / $total) * 85), 0)
+        $percent = [math]::Round(15 + (($counter / $total) * 85), 0)
 
         Write-Progress `
             -Activity "Auditing Users ($AccountScope / $modeLabel)" `
