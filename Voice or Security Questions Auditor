@@ -6,7 +6,8 @@ The entire risk arising out of the use or performance of the sample scripts and 
 In no event shall Microsoft, its authors, or anyone else involved in the creation, production, or delivery of the scripts
 be liable for any damages whatsoever (including, without limitation, damages for loss of business profits, business interruption,
 loss of business information, or other pecuniary loss) arising out of the use of or inability to use the sample scripts or
-documentation, even if Microsoft has been advised of the possibility of such damages. #>
+documentation, even if Microsoft has been advised of the possibility of such damages.
+#>
 
 param(
     [string]$OutputFolder = 'C:\Temp'
@@ -134,17 +135,44 @@ function Get-SampleSize {
     while ($true) {
         $inputValue = Read-Host "Enter number of users to sample"
 
-        if ([string]::IsNullOrWhiteSpace($inputValue)) {
+        if (:IsNullOrWhiteSpace($inputValue)) {
             Write-Host "A value is required." -ForegroundColor Red
             continue
         }
 
         $parsedValue = 0
-        if ([int]::TryParse($inputValue, [ref]$parsedValue) -and $parsedValue -gt 0) {
+        if (:TryParse($inputValue, [ref]$parsedValue) -and $parsedValue -gt 0) {
             return $parsedValue
         }
 
         Write-Host "Enter a whole number greater than 0." -ForegroundColor Red
+    }
+}
+
+function Get-DomainFilter {
+    while ($true) {
+        Write-Host ""
+        Write-Host "Optional domain filter" -ForegroundColor Cyan
+        Write-Host "Examples:"
+        Write-Host "  contoso.com"
+        Write-Host "  contoso.com,fabrikam.com"
+        Write-Host "  *   (all domains / no filter)"
+        $inputValue = Read-Host "Enter UPN domain filter"
+
+        if (:IsNullOrWhiteSpace($inputValue) -or $inputValue -eq '*') {
+            return @()
+        }
+
+        $domains = $inputValue.Split(',') |
+            ForEach-Object { $_.Trim().ToLowerInvariant() } |
+            Where-Object { -not :IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique
+
+        if (@($domains).Count -gt 0) {
+            return @($domains)
+        }
+
+        Write-Host "Enter one or more valid domains, or * for all." -ForegroundColor Red
     }
 }
 
@@ -158,7 +186,9 @@ function Export-AuditResults {
 
         [Parameter(Mandatory = $true)]
         [ValidateSet('Enabled','All')]
-        [string]$AccountScope
+        [string]$AccountScope,
+
+        [string[]]$DomainFilter = @()
     )
 
     if (-not (Test-Path $OutputFolder)) {
@@ -167,7 +197,13 @@ function Export-AuditResults {
 
     $timestamp = Get-Date -Format 'yyyyMMdd_HHmm'
     $safeModeLabel = $ModeLabel -replace '[^A-Za-z0-9]', ''
-    $baseName = "AuthAudit_${AccountScope}_${safeModeLabel}_$timestamp"
+    $domainLabel = if (@($DomainFilter).Count -gt 0) {
+        (($DomainFilter -join '_') -replace '[^A-Za-z0-9_\-]', '')
+    }
+    else {
+        'AllDomains'
+    }
+    $baseName = "AuthAudit_${AccountScope}_${safeModeLabel}_${domainLabel}_$timestamp"
 
     if ($UseExcel) {
         $xlsxPath = Join-Path $OutputFolder "$baseName.xlsx"
@@ -196,38 +232,92 @@ function Export-AuditResults {
     Write-Host "Exported text: $txtPath" -ForegroundColor Green
 }
 
-function Get-ModernSecurityQuestionPresence {
+function Get-UserAuthMethodInventory {
     param(
         [Parameter(Mandatory = $true)]
         [string]$UserId
     )
 
-    $modernSQ = $false
+    $methodNames = [System.Collections.Generic.List[string]]::new()
+    $modernSQ    = $false
+    $smsEnabled  = $false
+    $voiceEnabled = $false
 
     try {
-        $methods = Get-MgUserAuthenticationMethod -UserId $UserId -ErrorAction Stop
+        $methods = @(Get-MgUserAuthenticationMethod -UserId $UserId -ErrorAction Stop)
 
         foreach ($method in $methods) {
-            if ($method.PSObject.Properties.Name -contains 'AdditionalProperties') {
-                if ($method.AdditionalProperties.'@odata.type' -eq '#microsoft.graph.securityQuestionAuthenticationMethod') {
-                    $modernSQ = $true
-                    break
-                }
+            $odataType = $null
+
+            if ($method.PSObject.Properties.Name -contains 'AdditionalProperties' -and
+                $null -ne $method.AdditionalProperties -and
+                $method.AdditionalProperties.ContainsKey('@odata.type')) {
+                $odataType = [string]$method.AdditionalProperties['@odata.type']
+            }
+            elseif ($method.PSObject.Properties.Name -contains '@odata.type') {
+                $odataType = [string]$method.'@odata.type'
             }
 
-            if ($method.PSObject.Properties.Name -contains '@odata.type') {
-                if ($method.'@odata.type' -eq '#microsoft.graph.securityQuestionAuthenticationMethod') {
+            switch ($odataType) {
+                '#microsoft.graph.microsoftAuthenticatorAuthenticationMethod'            { $methodNames.Add('Microsoft Authenticator') }
+                '#microsoft.graph.passwordlessMicrosoftAuthenticatorAuthenticationMethod' { $methodNames.Add('Authenticator (passwordless)') }
+                '#microsoft.graph.fido2AuthenticationMethod'                             { $methodNames.Add('FIDO2 security key') }
+                '#microsoft.graph.windowsHelloForBusinessAuthenticationMethod'           { $methodNames.Add('Windows Hello for Business') }
+                '#microsoft.graph.softwareOathAuthenticationMethod'                      { $methodNames.Add('Software OATH') }
+                '#microsoft.graph.emailAuthenticationMethod'                             { $methodNames.Add('Email') }
+                '#microsoft.graph.passwordAuthenticationMethod'                          { $methodNames.Add('Password') }
+                '#microsoft.graph.temporaryAccessPassAuthenticationMethod'               { $methodNames.Add('Temporary Access Pass') }
+                '#microsoft.graph.platformCredentialAuthenticationMethod'                { $methodNames.Add('Passkey (platform credential)') }
+
+                '#microsoft.graph.securityQuestionAuthenticationMethod' {
+                    $methodNames.Add('Security questions')
                     $modernSQ = $true
-                    break
+                }
+
+                '#microsoft.graph.phoneAuthenticationMethod' {
+                    $phoneType = $null
+                    $smsState  = $null
+
+                    if ($method.PSObject.Properties.Name -contains 'AdditionalProperties' -and
+                        $null -ne $method.AdditionalProperties) {
+                        if ($method.AdditionalProperties.ContainsKey('phoneType')) {
+                            $phoneType = [string]$method.AdditionalProperties['phoneType']
+                        }
+                        if ($method.AdditionalProperties.ContainsKey('smsSignInState')) {
+                            $smsState = [string]$method.AdditionalProperties['smsSignInState']
+                        }
+                    }
+
+                    if ($method.PSObject.Properties.Name -contains 'PhoneType' -and $null -ne $method.PhoneType) {
+                        $phoneType = [string]$method.PhoneType
+                    }
+                    if ($method.PSObject.Properties.Name -contains 'SmsSignInState' -and $null -ne $method.SmsSignInState) {
+                        $smsState = [string]$method.SmsSignInState
+                    }
+
+                    if (-not :IsNullOrWhiteSpace($phoneType)) {
+                        $methodNames.Add("Phone ($phoneType)")
+                        $voiceEnabled = $true
+                    }
+                    else {
+                        $methodNames.Add('Phone')
+                    }
+
+                    if ($smsState -eq 'ready') {
+                        $smsEnabled = $true
+                    }
                 }
             }
         }
     }
-    catch {
-        $modernSQ = $false
-    }
+    catch {}
 
-    return $modernSQ
+    return [PSCustomObject]@{
+        AllRegisteredAuthMethods = ($methodNames | Sort-Object -Unique) -join '; '
+        ModernSecurityQuestion   = $modernSQ
+        SmsEnabled               = $smsEnabled
+        VoiceEnabled             = $voiceEnabled
+    }
 }
 
 function Get-PerUserMfaState {
@@ -304,7 +394,7 @@ function Get-UserSignInMethodView {
             $result.SystemPreferredEnabled = [bool]$isSystemPreferred
         }
 
-        if (-not [string]::IsNullOrWhiteSpace([string]$userMethod)) {
+        if (-not :IsNullOrWhiteSpace([string]$userMethod)) {
             $result.UserDefaultSignInMethod = Resolve-AuthMethodName -Method ([string]$userMethod)
         }
 
@@ -344,7 +434,9 @@ function Run-Audit {
         [ValidateSet('Enabled','All')]
         [string]$AccountScope,
 
-        [int]$SampleSize = 0
+        [int]$SampleSize = 0,
+
+        [string[]]$DomainFilter = @()
     )
 
     if (-not (Test-GraphConnection)) {
@@ -354,6 +446,13 @@ function Run-Audit {
     $modeLabel = if ($Mode -eq 'Sample') { "Sample$SampleSize" } else { 'Full' }
 
     Write-Host "`nStarting $modeLabel audit for $AccountScope accounts..." -ForegroundColor Cyan
+    if (@($DomainFilter).Count -gt 0) {
+        Write-Host "Domain filter: $($DomainFilter -join ', ')" -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "Domain filter: All domains" -ForegroundColor DarkCyan
+    }
+
     Write-Progress -Activity "Preparing Audit" -Status "Retrieving authentication registration report..." -PercentComplete 5
 
     $registrationLookup = @{}
@@ -376,6 +475,16 @@ function Run-Audit {
 
         if ($AccountScope -eq 'Enabled') {
             $users = $users | Where-Object { $_.AccountEnabled -eq $true }
+        }
+
+        if (@($DomainFilter).Count -gt 0) {
+            $users = $users | Where-Object {
+                $upnDomain = $null
+                if (-not :IsNullOrWhiteSpace($_.UserPrincipalName) -and $_.UserPrincipalName -match '@') {
+                    $upnDomain = ($_.UserPrincipalName.Split('@')[-1]).ToLowerInvariant()
+                }
+                $upnDomain -in $DomainFilter
+            }
         }
     }
     catch {
@@ -400,7 +509,7 @@ function Run-Audit {
 
     foreach ($user in $users) {
         $counter++
-        $percent = [math]::Round(15 + (($counter / $total) * 85), 0)
+        $percent = :Round(15 + (($counter / $total) * 85), 0)
 
         Write-Progress `
             -Activity "Auditing Users ($AccountScope / $modeLabel)" `
@@ -414,8 +523,8 @@ function Run-Audit {
 
         $mfaState   = Get-PerUserMfaState -UserId $user.Id
         $phones     = Get-UserPhoneMethods -UserId $user.Id
-        $modernSQ   = Get-ModernSecurityQuestionPresence -UserId $user.Id
-        $signal     = Get-SecurityQuestionSignal -RegistrationRecord $reg -ModernSecurityQuestionFound $modernSQ
+        $authInv    = Get-UserAuthMethodInventory -UserId $user.Id
+        $signal     = Get-SecurityQuestionSignal -RegistrationRecord $reg -ModernSecurityQuestionFound $authInv.ModernSecurityQuestion
         $signInView = Get-UserSignInMethodView -UserId $user.Id
 
         if (-not $phones -or @($phones).Count -eq 0) {
@@ -423,6 +532,7 @@ function Run-Audit {
                 UserPrincipalName       = $user.UserPrincipalName
                 Email                   = $user.Mail
                 AccountEnabled          = $user.AccountEnabled
+                Domain                  = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' })
                 PerUserMfaState         = $mfaState
                 SignInMode              = $signInView.SignInMode
                 UserDefaultSignInMethod = $signInView.UserDefaultSignInMethod
@@ -430,6 +540,9 @@ function Run-Audit {
                 IsMfaRegistered         = if ($null -ne $reg) { $reg.IsMfaRegistered } else { $null }
                 IsSsprRegistered        = if ($null -ne $reg) { $reg.IsSsprRegistered } else { $null }
                 SecurityQuestionSignals = $signal
+                SmsEnabled              = $authInv.SmsEnabled
+                VoiceEnabled            = $authInv.VoiceEnabled
+                AllRegisteredAuthMethods = $authInv.AllRegisteredAuthMethods
                 PhoneType               = 'None'
                 PhoneNumber             = ''
             })
@@ -447,6 +560,7 @@ function Run-Audit {
                     UserPrincipalName       = $user.UserPrincipalName
                     Email                   = $user.Mail
                     AccountEnabled          = $user.AccountEnabled
+                    Domain                  = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' })
                     PerUserMfaState         = $mfaState
                     SignInMode              = $signInView.SignInMode
                     UserDefaultSignInMethod = $signInView.UserDefaultSignInMethod
@@ -454,6 +568,9 @@ function Run-Audit {
                     IsMfaRegistered         = if ($null -ne $reg) { $reg.IsMfaRegistered } else { $null }
                     IsSsprRegistered        = if ($null -ne $reg) { $reg.IsSsprRegistered } else { $null }
                     SecurityQuestionSignals = $signal
+                    SmsEnabled              = $authInv.SmsEnabled
+                    VoiceEnabled            = $authInv.VoiceEnabled
+                    AllRegisteredAuthMethods = $authInv.AllRegisteredAuthMethods
                     PhoneType               = $mapped
                     PhoneNumber             = $p.PhoneNumber
                 })
@@ -464,9 +581,9 @@ function Run-Audit {
     Write-Progress -Activity "Auditing Users" -Completed
 
     $sorted = $results | Sort-Object UserPrincipalName, PhoneType
-    Export-AuditResults -Results $sorted -ModeLabel $modeLabel -AccountScope $AccountScope
+    Export-AuditResults -Results $sorted -ModeLabel $modeLabel -AccountScope $AccountScope -DomainFilter $DomainFilter
 
-    Write-Host "`nAudit complete." -ForegroundColor Green
+    Write-Host "`nAudit complete. Results exported." -ForegroundColor Green
 }
 
 function Show-AuditSubMenu {
@@ -488,10 +605,12 @@ function Show-AuditSubMenu {
         switch ($subChoice.ToUpper()) {
             '1' {
                 $sampleSize = Get-SampleSize
-                Run-Audit -Mode 'Sample' -AccountScope $AccountScope -SampleSize $sampleSize
+                $domainFilter = Get-DomainFilter
+                Run-Audit -Mode 'Sample' -AccountScope $AccountScope -SampleSize $sampleSize -DomainFilter $domainFilter
             }
             '2' {
-                Run-Audit -Mode 'Full' -AccountScope $AccountScope
+                $domainFilter = Get-DomainFilter
+                Run-Audit -Mode 'Full' -AccountScope $AccountScope -DomainFilter $domainFilter
             }
             'B' {
                 break
