@@ -666,3 +666,151 @@ function Run-Audit {
         if (-not $phones -or @($phones).Count -eq 0) {
             $results.Add([PSCustomObject]@{
                 DisplayName                 = $user.DisplayName
+                UserPrincipalName           = $user.UserPrincipalName
+                Email                       = $user.Mail
+                AccountEnabled              = $user.AccountEnabled
+                Domain                      = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' })
+                PerUserMfaState             = $mfaState
+                SignInMode                  = $signInView.SignInMode
+                UserDefaultSignInMethod     = $signInView.UserDefaultSignInMethod
+                SystemPreferredEnabled      = $signInView.SystemPreferredEnabled
+                IsMfaRegistered             = if ($null -ne $reg) { $reg.IsMfaRegistered } else { $null }
+                IsSsprRegistered            = if ($null -ne $reg) { $reg.IsSsprRegistered } else { $null }
+                SecurityQuestionsRegistered = $sqStatus.SecurityQuestionsRegistered
+                SecurityQuestionEvidence    = $sqStatus.SecurityQuestionEvidence
+                RegisteredMethodsFromReport = $sqStatus.RegisteredMethodsFromReport
+                SmsEnabled                  = $authInv.SmsEnabled
+                VoiceEnabled                = $authInv.VoiceEnabled
+                AllRegisteredAuthMethods    = $authInv.AllRegisteredAuthMethods
+                PhoneType                   = 'None'
+                PhoneNumber                 = ''
+            })
+        }
+        else {
+            foreach ($p in $phones) {
+                $mapped = if ($script:PhoneTypeMap.ContainsKey([string]$p.Id)) {
+                    $script:PhoneTypeMap[[string]$p.Id]
+                }
+                elseif ($p.PSObject.Properties.Name -contains 'PhoneType' -and $null -ne $p.PhoneType) {
+                    [string]$p.PhoneType
+                }
+                else {
+                    'Unknown'
+                }
+
+                $results.Add([PSCustomObject]@{
+                    DisplayName                 = $user.DisplayName
+                    UserPrincipalName           = $user.UserPrincipalName
+                    Email                       = $user.Mail
+                    AccountEnabled              = $user.AccountEnabled
+                    Domain                      = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' })
+                    PerUserMfaState             = $mfaState
+                    SignInMode                  = $signInView.SignInMode
+                    UserDefaultSignInMethod     = $signInView.UserDefaultSignInMethod
+                    SystemPreferredEnabled      = $signInView.SystemPreferredEnabled
+                    IsMfaRegistered             = if ($null -ne $reg) { $reg.IsMfaRegistered } else { $null }
+                    IsSsprRegistered            = if ($null -ne $reg) { $reg.IsSsprRegistered } else { $null }
+                    SecurityQuestionsRegistered = $sqStatus.SecurityQuestionsRegistered
+                    SecurityQuestionEvidence    = $sqStatus.SecurityQuestionEvidence
+                    RegisteredMethodsFromReport = $sqStatus.RegisteredMethodsFromReport
+                    SmsEnabled                  = $authInv.SmsEnabled
+                    VoiceEnabled                = $authInv.VoiceEnabled
+                    AllRegisteredAuthMethods    = $authInv.AllRegisteredAuthMethods
+                    PhoneType                   = $mapped
+                    PhoneNumber                 = $p.PhoneNumber
+                })
+            }
+        }
+    }
+
+    Write-Progress -Activity "Auditing Users" -Completed
+
+    $sorted = $results | Sort-Object UserPrincipalName, PhoneType
+    Export-AuditResults `
+        -Results $sorted `
+        -ModeLabel $modeLabel `
+        -AccountScope $AccountScope `
+        -DomainFilter $DomainFilter `
+        -UpnFilter $UpnFilter
+
+    Write-Host "`nAudit complete. Results exported." -ForegroundColor Green
+}
+
+function Show-AuditSubMenu {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Enabled','All')]
+        [string]$AccountScope
+    )
+
+    while ($true) {
+        Write-Host ""
+        Write-Host "===== $AccountScope ACCOUNTS MENU =====" -ForegroundColor Cyan
+        Write-Host "1. Sample Results (prompt for count)"
+        Write-Host "2. Full Tenant Audit"
+        Write-Host "3. Specific UPN(s)"
+        Write-Host "B. Back"
+
+        $subChoice = Read-Host "Select an option"
+
+        switch ($subChoice.ToUpper()) {
+            '1' {
+                $sampleSize = Get-SampleSize
+                $domainFilter = Get-DomainFilter
+                Run-Audit -Mode 'Sample' -AccountScope $AccountScope -SampleSize $sampleSize -DomainFilter $domainFilter
+            }
+            '2' {
+                $domainFilter = Get-DomainFilter
+                Run-Audit -Mode 'Full' -AccountScope $AccountScope -DomainFilter $domainFilter
+            }
+            '3' {
+                $upnFilter = Get-UpnFilter
+                if (@($upnFilter).Count -gt 0) {
+                    Run-Audit -Mode 'Targeted' -AccountScope $AccountScope -UpnFilter $upnFilter
+                }
+                else {
+                    Write-Host "No UPNs entered." -ForegroundColor Yellow
+                }
+            }
+            'B' {
+                return
+            }
+            default {
+                Write-Host "Invalid selection." -ForegroundColor Red
+            }
+        }
+    }
+}
+
+# =========================
+# MAIN MENU
+# =========================
+while ($true) {
+    Write-Host "`n===== MAIN MENU =====" -ForegroundColor Cyan
+    Write-Host "1. Disconnect / Reconnect Microsoft Graph"
+    Write-Host "2. Audit Enabled Accounts"
+    Write-Host "3. Audit All Accounts"
+    Write-Host "Q. Quit"
+
+    $choice = Read-Host "Select an option"
+
+    switch ($choice.ToUpper()) {
+        '1' {
+            Connect-GraphSession
+        }
+        '2' {
+            Show-AuditSubMenu -AccountScope 'Enabled'
+        }
+        '3' {
+            Show-AuditSubMenu -AccountScope 'All'
+        }
+        'Q' {
+            Disconnect-GraphSession
+            Write-Host "Exiting..." -ForegroundColor Yellow
+            break
+        }
+        default {
+            Write-Host "Invalid selection." -ForegroundColor Red
+        }
+    }
+}
