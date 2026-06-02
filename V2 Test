@@ -199,7 +199,6 @@ function Export-AuditResults {
         [string]$AccountScope,
 
         [string[]]$DomainFilter = @(),
-
         [string[]]$UpnFilter = @()
     )
 
@@ -209,8 +208,7 @@ function Export-AuditResults {
 
     $timestamp = Get-Date -Format 'yyyyMMdd_HHmm'
     $safeModeLabel = $ModeLabel -replace '[^A-Za-z0-9]', ''
-
-    $domainLabel = if (@($UpnFilter).Count -gt 0) {
+    $scopeLabel = if (@($UpnFilter).Count -gt 0) {
         'SpecificUPNs'
     }
     elseif (@($DomainFilter).Count -gt 0) {
@@ -220,7 +218,7 @@ function Export-AuditResults {
         'AllDomains'
     }
 
-    $baseName = "AuthAudit_${AccountScope}_${safeModeLabel}_${domainLabel}_$timestamp"
+    $baseName = "AuthAudit_${AccountScope}_${safeModeLabel}_${scopeLabel}_$timestamp"
 
     if ($UseExcel) {
         $xlsxPath = Join-Path $OutputFolder "$baseName.xlsx"
@@ -310,20 +308,8 @@ function Get-SecurityQuestionStatus {
 
     $isRegistered = $ModernSecurityQuestionFound -or $reportShowsSecurityQuestions
 
-    $evidence = if ($ModernSecurityQuestionFound) {
-        'Authentication method object'
-    }
-    elseif ($reportShowsSecurityQuestions) {
-        'Registration report methodsRegistered'
-    }
-    else {
-        'Not detected'
-    }
-
     return [PSCustomObject]@{
         SecurityQuestionsRegistered = $isRegistered
-        SecurityQuestionEvidence    = $evidence
-        RegisteredMethodsFromReport = ($registeredMethods | Sort-Object -Unique) -join '; '
     }
 }
 
@@ -338,8 +324,6 @@ function Get-UserAuthMethodInventory {
 
     $methodNames  = [System.Collections.Generic.List[string]]::new()
     $modernSQ     = $false
-    $smsEnabled   = $false
-    $voiceEnabled = $false
 
     try {
         $methods = @(Get-MgUserAuthenticationMethod -UserId $UserId -ErrorAction Stop)
@@ -408,22 +392,17 @@ function Get-UserAuthMethodInventory {
         switch ($phoneType) {
             'mobile' {
                 $methodNames.Add('Phone call (mobile)')
-                $voiceEnabled = $true
-
                 if ($smsState -eq 'ready') {
                     $methodNames.Add('SMS')
-                    $smsEnabled = $true
                 }
             }
 
             'alternateMobile' {
                 $methodNames.Add('Phone call (alternate mobile)')
-                $voiceEnabled = $true
             }
 
             'office' {
                 $methodNames.Add('Phone call (office)')
-                $voiceEnabled = $true
             }
 
             default {
@@ -435,8 +414,6 @@ function Get-UserAuthMethodInventory {
     return [PSCustomObject]@{
         AllRegisteredAuthMethods = ($methodNames | Sort-Object -Unique) -join '; '
         ModernSecurityQuestion   = $modernSQ
-        SmsEnabled               = $smsEnabled
-        VoiceEnabled             = $voiceEnabled
     }
 }
 
@@ -557,7 +534,6 @@ function Run-Audit {
         [int]$SampleSize = 0,
 
         [string[]]$DomainFilter = @(),
-
         [string[]]$UpnFilter = @()
     )
 
@@ -672,24 +648,18 @@ function Run-Audit {
 
         if (-not $phones -or @($phones).Count -eq 0) {
             $results.Add([PSCustomObject]@{
-                UserPrincipalName            = $user.UserPrincipalName
-                Email                        = $user.Mail
-                AccountEnabled               = $user.AccountEnabled
-                Domain                       = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' })
-                PerUserMfaState              = $mfaState
-                SignInMode                   = $signInView.SignInMode
-                UserDefaultSignInMethod      = $signInView.UserDefaultSignInMethod
-                SystemPreferredEnabled       = $signInView.SystemPreferredEnabled
-                IsMfaRegistered              = if ($null -ne $reg) { $reg.IsMfaRegistered } else { $null }
-                IsSsprRegistered             = if ($null -ne $reg) { $reg.IsSsprRegistered } else { $null }
-                SecurityQuestionsRegistered  = $sqStatus.SecurityQuestionsRegistered
-                SecurityQuestionEvidence     = $sqStatus.SecurityQuestionEvidence
-                RegisteredMethodsFromReport  = $sqStatus.RegisteredMethodsFromReport
-                SmsEnabled                   = $authInv.SmsEnabled
-                VoiceEnabled                 = $authInv.VoiceEnabled
-                AllRegisteredAuthMethods     = $authInv.AllRegisteredAuthMethods
-                PhoneType                    = 'None'
-                PhoneNumber                  = ''
+                UserPrincipalName           = $user.UserPrincipalName
+                Email                       = $user.Mail
+                AccountEnabled              = $user.AccountEnabled
+                Domain                      = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' })
+                PerUserMfaState             = $mfaState
+                SignInMode                  = $signInView.SignInMode
+                UserDefaultSignInMethod     = $signInView.UserDefaultSignInMethod
+                SystemPreferredEnabled      = $signInView.SystemPreferredEnabled
+                SecurityQuestionsRegistered = $sqStatus.SecurityQuestionsRegistered
+                AllRegisteredAuthMethods    = $authInv.AllRegisteredAuthMethods
+                PhoneType                   = 'None'
+                PhoneNumber                 = ''
             })
         }
         else {
@@ -705,24 +675,18 @@ function Run-Audit {
                 }
 
                 $results.Add([PSCustomObject]@{
-                    UserPrincipalName            = $user.UserPrincipalName
-                    Email                        = $user.Mail
-                    AccountEnabled               = $user.AccountEnabled
-                    Domain                       = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' })
-                    PerUserMfaState              = $mfaState
-                    SignInMode                   = $signInView.SignInMode
-                    UserDefaultSignInMethod      = $signInView.UserDefaultSignInMethod
-                    SystemPreferredEnabled       = $signInView.SystemPreferredEnabled
-                    IsMfaRegistered              = if ($null -ne $reg) { $reg.IsMfaRegistered } else { $null }
-                    IsSsprRegistered             = if ($null -ne $reg) { $reg.IsSsprRegistered } else { $null }
-                    SecurityQuestionsRegistered  = $sqStatus.SecurityQuestionsRegistered
-                    SecurityQuestionEvidence     = $sqStatus.SecurityQuestionEvidence
-                    RegisteredMethodsFromReport  = $sqStatus.RegisteredMethodsFromReport
-                    SmsEnabled                   = $authInv.SmsEnabled
-                    VoiceEnabled                 = $authInv.VoiceEnabled
-                    AllRegisteredAuthMethods     = $authInv.AllRegisteredAuthMethods
-                    PhoneType                    = $mapped
-                    PhoneNumber                  = $p.PhoneNumber
+                    UserPrincipalName           = $user.UserPrincipalName
+                    Email                       = $user.Mail
+                    AccountEnabled              = $user.AccountEnabled
+                    Domain                      = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' })
+                    PerUserMfaState             = $mfaState
+                    SignInMode                  = $signInView.SignInMode
+                    UserDefaultSignInMethod     = $signInView.UserDefaultSignInMethod
+                    SystemPreferredEnabled      = $signInView.SystemPreferredEnabled
+                    SecurityQuestionsRegistered = $sqStatus.SecurityQuestionsRegistered
+                    AllRegisteredAuthMethods    = $authInv.AllRegisteredAuthMethods
+                    PhoneType                   = $mapped
+                    PhoneNumber                 = $p.PhoneNumber
                 })
             }
         }
