@@ -1,154 +1,119 @@
-============================================================
-  ReadMe - Authentication Methods / SMS MFA Capability Audit
-============================================================
+================================================================
+ AUTH AUDIT - COLUMN README / VALIDATION DICTIONARY
+================================================================
 
 PURPOSE
--------
-This audit reports per-user authentication method configuration with a focus
-on whether SMS can serve as a multifactor authentication (MFA) method. It is a
-CONFIGURATION/CAPABILITY audit, not a usage audit. To prove a method was
-actually used, validate against Microsoft Entra sign-in logs separately.
+This report audits Microsoft Entra authentication method registration
+and SMS-as-MFA likelihood. It is designed to work for both pre- and
+post-combined (converged) registration, because the per-user data is
+read from the unified authentication method store and the registration
+report's computed signals.
 
-Data sources:
-  - Microsoft Graph: Get-MgUser
-  - Microsoft Graph: Get-MgUserAuthenticationMethod
-  - Microsoft Graph: Get-MgUserAuthenticationPhoneMethod
-  - Microsoft Graph (beta): /users/{id}/authentication/requirements
-  - Microsoft Graph: Get-MgReportAuthenticationMethodUserRegistrationDetail
-    (or beta /reports/authenticationMethods/userRegistrationDetails/{id} for targeted)
-  - Microsoft Graph (beta): authenticationMethodConfigurations/Sms (tenant policy, queried once per run)
-
-Required scopes:
-  User.Read.All, UserAuthenticationMethod.Read.All, AuditLog.Read.All, Policy.Read.All
-
-
-============================================================
-COLUMN-BY-COLUMN VALIDATION
-============================================================
+----------------------------------------------------------------
+COLUMN DICTIONARY
+----------------------------------------------------------------
 
 UserPrincipalName
   Source : Get-MgUser
-  Meaning: The user's UPN.
-  Notes  : Primary identifier for each row.
+  Meaning: User principal name.
+  Notes  : Directory value.
 
 Email
   Source : Get-MgUser (Mail)
-  Meaning: The user's primary email address (if populated).
-  Notes  : May be blank if no Mail attribute is set.
+  Meaning: Primary email address.
+  Notes  : May be empty.
 
 AccountEnabled
-  Source : Get-MgUser (AccountEnabled)
-  Meaning: Whether the account is enabled (True) or disabled (False).
-  Notes  : "Enabled accounts" scope filters to AccountEnabled = True.
+  Source : Get-MgUser
+  Meaning: Whether the account is enabled.
+  Notes  : Used by the "Enabled" scope filter.
 
 Domain
-  Source : Derived from UserPrincipalName
-  Meaning: The UPN domain suffix (text after the @).
-  Notes  : Parsed locally; not a separate Graph call.
+  Source : Derived from UPN
+  Meaning: UPN domain suffix.
+  Notes  : Parsed after the @ character.
 
 PerUserMfaState
   Source : beta /users/{id}/authentication/requirements (perUserMfaState)
-  Meaning: Legacy per-user MFA state (disabled / enabled / enforced).
-  Notes  : This is the legacy per-user MFA control, NOT Conditional Access.
-           Returns 'Unavailable' if the value cannot be read.
+  Meaning: Legacy per-user MFA state.
+  Notes  : enabled / enforced / disabled, or Unavailable.
 
 IsMfaRegistered
   Source : Authentication methods registration report (isMfaRegistered)
   Meaning: User has registered at least one MFA method.
-  Notes  : Reflects registration, not whether MFA is enforced.
+  Notes  : From the unified registration report.
 
 IsMfaCapable
   Source : Authentication methods registration report (isMfaCapable)
-  Meaning: User is MFA-capable per the EFFECTIVE authentication policy.
-  Notes  : Microsoft-computed value. It already accounts for whether a
-           registered method is enabled by policy, evaluating BOTH the legacy
-           MFA policy and the modern Authentication methods policy. Because of
-           this, it correctly covers users registered via either the
-           pre-combined (legacy) or post-combined (converged) registration
-           experience.
+  Meaning: User is MFA-capable per the EFFECTIVE policy.
+  Notes  : Reflects both legacy and modern policy. Covers BOTH pre- and
+           post-combined registration.
 
 TenantSmsPolicyState
-  Source : beta authenticationMethodConfigurations/Sms (state) - queried ONCE per run
-  Meaning: Tenant-level SMS authentication method policy state (enabled / disabled).
-  Notes  : This reads the MODERN Authentication methods policy. If SMS is
-           scoped to specific GROUPS rather than all users, this tenant-level
-           state can OVERSTATE per-user availability. For exact per-user
-           evaluation, the policy includeTargets would need to be resolved
-           against group membership.
+  Source : beta authenticationMethodConfigurations/Sms (state)
+  Meaning: Tenant-level SMS authentication method policy state.
+  Notes  : Queried ONCE per run. If SMS is scoped to specific groups
+           rather than all users, this tenant value can OVERSTATE
+           per-user availability.
 
-SmsMethodRegistered
-  Source : Live phone methods (mobile) OR registration report methodsRegistered
-           (patterns: mobilePhone / sms / phone)
-  Meaning: A mobile/SMS-capable phone method is registered for the user.
-  Notes  : Uses both the live phone method object and the registration report,
-           so it covers numbers registered through either the legacy or the
-           combined registration experience.
+MobilePhoneRegistered
+  Source : Get-MgUserAuthenticationPhoneMethod (mobile) OR
+           registration report methodsRegistered (mobilePhone / sms)
+  Meaning: A mobile phone method is registered for the user.
+  Notes  : Office numbers are voice-only and are EXCLUDED. Generic
+           "phone" matching is intentionally not used.
 
-SmsMfaAvailable
+SmsMfaLikelyAvailable
   Source : Derived (composite)
-  Meaning: Best-effort indicator that SMS can serve as an MFA method for the user.
+  Meaning: LIKELIHOOD that SMS can serve as an MFA method for the user.
   Logic  : IsMfaCapable = True
-           AND SmsMethodRegistered = True
+           AND MobilePhoneRegistered = True
            AND TenantSmsPolicyState = enabled
-  Notes  : This is a CAPABILITY signal, NOT proof that SMS was used. To confirm
-           SMS was actually used as MFA, cross-reference the Microsoft Entra
-           sign-in logs (authenticationMethodsUsed / authentication details).
-           Also subject to the group-scoping caveat noted under TenantSmsPolicyState.
+  Notes  : This is a LIKELIHOOD / CAPABILITY signal, NOT proof that SMS
+           was used, and NOT an SMS-specific guarantee. A registered
+           mobile number can serve SMS or voice depending on policy.
+           Definitive confirmation that SMS was usable/used as MFA
+           requires Microsoft Entra sign-in log validation
+           (authenticationMethodsUsed / authentication details).
+           Also subject to the group-scoping caveat under
+           TenantSmsPolicyState.
 
 SecurityQuestionsRegistered
-  Source : securityQuestionAuthenticationMethod object
-           OR registration report methodsRegistered (security question patterns)
-  Meaning: Whether the user has security questions registered.
-  Notes  : This is NOT inferred from IsSsprRegistered. SSPR registration alone
-           does not prove security questions are one of the registered methods.
+  Source : securityQuestionAuthenticationMethod object OR
+           registration report methodsRegistered
+  Meaning: Whether security questions are registered.
+  Notes  : NOT inferred from IsSsprRegistered.
 
 AllRegisteredAuthMethods
   Source : Get-MgUserAuthenticationMethod + normalized phone methods
-  Meaning: Human-readable list of the user's registered authentication methods.
-  Notes  : Phone methods are normalized to friendly labels
-           (e.g., "Phone call (mobile)", "SMS").
+  Meaning: Normalized list of registered authentication methods.
+  Notes  : Sorted unique; semicolon-joined.
 
 PhoneType
-  Source : Get-MgUserAuthenticationPhoneMethod (PhoneType / method ID mapping)
-  Meaning: The phone type for the row (mobile / alternateMobile / office / None).
-  Notes  : One row is emitted per registered phone method. Users with no phone
-           methods produce a single row with PhoneType = None.
+  Source : Get-MgUserAuthenticationPhoneMethod
+  Meaning: Phone type for this row.
+  Notes  : mobile / alternateMobile / office, or None.
 
 PhoneNumber
-  Source : Get-MgUserAuthenticationPhoneMethod (PhoneNumber)
-  Meaning: The registered phone number for that phone method.
-  Notes  : May be masked depending on the calling role's permissions
-           (e.g., Authentication Administrator sees masked numbers).
+  Source : Get-MgUserAuthenticationPhoneMethod
+  Meaning: Registered phone number.
+  Notes  : One row per phone method.
 
-
-============================================================
+----------------------------------------------------------------
 KEY CAVEATS
-============================================================
+----------------------------------------------------------------
+1. SmsMfaLikelyAvailable is a LIKELIHOOD signal, not proof. To confirm
+   SMS was actually used as MFA, cross-reference Microsoft Entra
+   sign-in logs (authenticationMethodsUsed / authentication details).
 
-1. CAPABILITY vs USAGE
-   SmsMfaAvailable indicates the user CAN use SMS for MFA based on
-   capability + registration + tenant policy. It does NOT prove SMS was
-   actually used. Use the Microsoft Entra sign-in logs to confirm real usage.
+2. TenantSmsPolicyState reflects tenant-level state. If SMS is enabled
+   only for specific groups, this value can overstate per-user
+   availability. Resolve includeTargets vs. group membership for exact
+   per-user precision.
 
-2. TENANT POLICY SCOPING
-   TenantSmsPolicyState (and therefore SmsMfaAvailable) is based on the
-   tenant-level SMS method policy state. If SMS is enabled only for specific
-   groups, the tenant-level value may overstate availability for users who are
-   not in those groups.
+3. Office phone numbers are voice-only and are excluded from
+   MobilePhoneRegistered and from SmsMfaLikelyAvailable.
 
-3. PRE- vs POST-COMBINED REGISTRATION
-   IsMfaCapable is a Microsoft-computed value that accounts for both the legacy
-   MFA policy and the modern Authentication methods policy, so it remains valid
-   whether or not the tenant has migrated to the converged (combined)
-   registration experience. Per-user registration (phone methods, security
-   questions, etc.) is read from the unified authentication method store, which
-   also reflects both registration experiences.
-
-4. SMS SIGN-IN vs SMS MFA
-   This audit intentionally does NOT report smsSignInState. That property
-   reflects FIRST-FACTOR SMS sign-in readiness (passwordless phone sign-in),
-   which is a different feature from using SMS as an MFA second factor. A user
-   can use SMS for MFA even when smsSignInState is notAllowedByPolicy or
-   notSupported.
-
-============================================================
+4. IsMfaCapable covers both pre- and post-combined registration because
+   it reflects the effective policy and the unified method store.
+================================================================
