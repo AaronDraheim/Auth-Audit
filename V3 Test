@@ -426,8 +426,8 @@ function Export-AuditResults {
             -AutoSize `
             -FreezeTopRow `
             -BoldTopRow
-    }
         Write-Host "`nExported Excel: $xlsxPath" -ForegroundColor Green
+    }
     else {
         $csvPath = Join-Path $OutputFolder "$baseName.csv"
         $Results | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
