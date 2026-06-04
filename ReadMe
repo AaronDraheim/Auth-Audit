@@ -1,143 +1,151 @@
 # Authentication Methods Audit
-This script should be treated as a **best-effort reporting tool** and not as definitive proof of effective SMS MFA eligibility in all cases.
-
----
 
 ## Overview
 
-This script collects authentication-related data for users in Microsoft Entra ID and exports the results to Excel when the `ImportExcel` module is available.
+This script audits Microsoft Entra ID user authentication method data through Microsoft Graph and exports the results to Excel, CSV, and text output.
 
-If `ImportExcel` is not installed, the script exports the results to CSV and text instead.
-
----
+The report is designed to provide a consolidated, one-row-per-user view of authentication registration details, phone method registration, default sign-in method preference, and SMS MFA likelihood.
 
 ## What the Script Collects
 
-The script gathers the following data for each user in scope:
+For each user, the script collects:
 
-- **User principal name**
-- **Email address**
-- **Account enabled status**
-- **Domain**
-- **Per-user MFA state**
-- **MFA registration status**
-- **MFA capability status**
-- **Tenant SMS authentication method policy state**
-- **Whether a mobile phone authentication method is registered**
-- **Whether SMS MFA is likely available**
-- **Registered security questions status**
-- **All registered authentication methods**
-- **Phone type**
-- **Phone number**
+- User principal name
+- Email address
+- Account enabled status
+- UPN domain
+- Per-user MFA state
+- Sign-in mode
+- User default sign-in method
+- System-preferred authentication status
+- MFA registered status
+- MFA capable status
+- Tenant SMS authentication method policy state
+- Mobile phone registration status
+- SMS MFA likely availability
+- Security questions registration status
+- All registered authentication methods
+- Phone types
+- Phone numbers
 
----
+## Report Format
 
-## Data Sources Used
+The export is intentionally structured as one row per user.
 
-The script combines data from several Microsoft Graph endpoints, including:
+If a user has multiple phone methods, those values are combined into the following columns:
 
-- **User objects**
-- **User authentication phone methods**
-- **General authentication method inventory**
-- **Authentication methods registration report**
-- **Per-user MFA requirements**
-- **Tenant authentication methods policy for SMS**
+- PhoneTypes
+- PhoneNumbers
 
----
+This avoids duplicate user rows and keeps the report easier to filter, summarize, and review at scale.
 
-## How the Data Is Built
+## SMS MFA Logic
 
-For each user, the script performs the following steps:
+The `SmsMfaLikelyAvailable` column is a best-effort indicator.
 
-1. **Retrieves the user object**
-2. **Retrieves phone authentication methods**
-3. **Retrieves the user’s authentication method inventory**
-4. **Retrieves the authentication methods registration record when available**
-5. **Retrieves the per-user MFA state**
-6. **Retrieves the tenant SMS method policy state once per run**
-7. **Combines those values into export rows**
+The script marks `SmsMfaLikelyAvailable` as `True` when a mobile phone authentication method is detected for the user.
 
-### Important Note
+The logic is intentionally based on mobile phone registration because mobile phone is the relevant phone type for SMS-based authentication.
 
-If a user has multiple phone authentication methods, the script creates **one row per phone method**.
+## Phone Method Handling
 
-Because of that, the same user can appear on multiple rows in the final output.
+The script evaluates phone methods as follows:
 
----
+- `mobile`
+  - Used as the primary signal for SMS MFA likely availability
+  - Included in `MobilePhoneRegistered`
+  - Included in `PhoneTypes`
 
-## How `SmsMfaLikelyAvailable` Is Assessed
+- `alternateMobile`
+  - Included in `PhoneTypes`
+  - Not used by itself to mark SMS MFA likely availability
 
-The current intent of the script is to treat SMS MFA as likely available when a **mobile phone authentication method** is present.
+- `office`
+  - Included in `PhoneTypes`
+  - Not used for SMS MFA likely availability
 
-### Current Logic Intent
+## Default Sign-In Method Handling
 
-- **Mobile phone** is treated as the SMS-relevant phone type
-- **Office phone** is excluded
-- **Alternate mobile** is excluded from the SMS likely calculation
-- **Tenant SMS policy state** is retained as informational context
-- **MFA-capable report fields** are retained as informational context
+The script also collects the user's default sign-in method from sign-in preferences.
 
-### Interpretation
+This value is reported in:
 
-`SmsMfaLikelyAvailable` is a **best-effort indicator** only.
+- `SignInMode`
+- `UserDefaultSignInMethod`
+- `SystemPreferredEnabled`
 
-It is **not** a guarantee that SMS MFA will be available or used in every real-world authentication flow.
+Important: `UserDefaultSignInMethod = SMS` is informational only.
 
----
+It is not used by itself to mark `SmsMfaLikelyAvailable` as true because a default method value may not always prove the method is currently registered or usable.
 
-## Export Behavior
+## Tenant SMS Policy Handling
 
-### If `ImportExcel` Is Installed
+The script collects the tenant SMS authentication method policy state and reports it in:
 
-- Results are exported to an **Excel workbook**
-- Worksheet name is **`AuditResults`**
-- The sheet is formatted as a **table**
-- Top row is **bold**
-- Top row is **frozen**
-- Columns are **auto-sized**
+- `TenantSmsPolicyState`
 
-### If `ImportExcel` Is Not Installed
+This value is informational only.
 
-- Results are exported to **CSV**
-- A **text export** is also created
+It is not used as a hard requirement for `SmsMfaLikelyAvailable` because user-level behavior may not always align cleanly with tenant-level reporting.
 
----
+## Authentication Registration Report Fields
+
+The script also includes report-based MFA fields:
+
+- `IsMfaRegistered`
+- `IsMfaCapable`
+
+These values come from Microsoft Graph authentication method registration reporting.
+
+They are useful context, but they are not used as the sole authority for SMS MFA availability.
+
+## Output Behavior
+
+If the `ImportExcel` PowerShell module is available, the script exports:
+
+- Excel workbook
+- Text file
+
+If `ImportExcel` is not available, the script exports:
+
+- CSV file
+- Text file
 
 ## Known Limitations
 
-This script should be treated as a best-effort reporting tool.
+This script should be treated as a reporting and audit aid, not as definitive proof of authentication behavior.
 
-The following limitations were identified:
+Known limitations:
 
-- The script currently references helper functions that are no longer present in the file
-- Because of that, the script may not run successfully end-to-end without additional cleanup
-- SMS MFA likely availability is inferred and is not definitive proof that SMS MFA will work in all authentication flows
-- Registration report data and live authentication method data may not always align
-- Tenant SMS policy state may not always reflect observed user behavior in every scenario
-- Users with multiple phone methods appear multiple times in the output, so row count does not equal unique user count
-- Some values such as per-user MFA state or registration details may return unavailable depending on data availability or endpoint behavior
-
----
+- `SmsMfaLikelyAvailable` is an inferred value, not proof of a successful SMS challenge.
+- Default sign-in method is reported for context but is not treated as proof that SMS is registered or usable.
+- Tenant SMS policy state is reported for context but is not treated as a hard blocker.
+- Authentication registration report data and live authentication method data may not always align.
+- Some Microsoft Graph endpoints used by the script are beta endpoints and may change.
+- Sign-in behavior can still be affected by Conditional Access, authentication method policy scope, system-preferred authentication, user state, and service-side behavior.
+- Phone numbers may be masked depending on permissions and role context.
+- The report should not replace sign-in log validation when proof of actual SMS usage is required.
 
 ## Recommended Interpretation
 
-This output is best used as:
+Use this report to identify:
 
-- A **consolidated authentication methods audit**
-- A **phone method inventory**
-- A **best-effort view of user registration state**
-- A **starting point for further validation**
+- Users with registered authentication methods
+- Users with mobile phone authentication methods
+- Users likely able to use SMS MFA
+- Users with default sign-in method preferences
+- Users with security questions registered
+- Users with multiple phone method types
 
-This output should **not** be treated as:
+Do not use this report as the only source of truth for:
 
-- Definitive proof of effective SMS MFA eligibility
-- A one-to-one unique user count
-- A replacement for direct sign-in testing or sign-in log validation
-
----
+- Confirming successful SMS MFA usage
+- Proving Conditional Access enforcement
+- Proving effective authentication method policy assignment
+- Confirming exact user sign-in behavior
 
 ## Summary
 
-In summary, the script connects to Microsoft Graph, gathers user and authentication method data, combines that data into a row-based report, and exports the results to Excel or CSV.
+The script provides a consolidated Microsoft Entra ID authentication methods audit. It combines user data, authentication method inventory, registration reporting, phone method data, sign-in preferences, and tenant SMS policy state into a single export.
 
-The export is useful for auditing and review, but the current script still has known gaps that should be addressed before it is relied on as a fully validated production tool.
+The SMS MFA likely indicator is intentionally conservative and based on mobile phone registration, with default sign-in method and tenant policy state retained as supporting context only.
