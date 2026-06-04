@@ -351,7 +351,6 @@ function Export-AuditResults {
             -AutoSize `
             -FreezeTopRow `
             -BoldTopRow
-
     }
     else {
         $csvPath = Join-Path $OutputFolder "$baseName.csv"
@@ -359,9 +358,10 @@ function Export-AuditResults {
 
         Write-Host "`nImportExcel module not found. Exported CSV: $csvPath" -ForegroundColor Yellow
 
-    $txtPath = Join-Path $OutputFolder "$baseName.txt"
-    $Results | Format-List * | Out-String -Width 4096 | Set-Content -Path $txtPath -Encoding UTF8
-    Write-Host "Exported text: $txtPath" -ForegroundColor Green
+        $txtPath = Join-Path $OutputFolder "$baseName.txt"
+        $Results | Format-List * | Out-String -Width 4096 | Set-Content -Path $txtPath -Encoding UTF8
+        Write-Host "Exported text: $txtPath" -ForegroundColor Green
+    }
 }
 
 function Run-Audit {
