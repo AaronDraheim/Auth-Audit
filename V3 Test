@@ -91,12 +91,12 @@ function Test-GraphConnection {
 }
 
 # =========================
-# TENANT SMS POLICY
+# TENANT SMS POLICY (queried once per run)
 # =========================
 function Get-TenantSmsPolicyState {
     $result = [PSCustomObject]@{
-        SmsPolicyState   = 'Unknown'
         SmsPolicyEnabled = $false
+        SmsPolicyState   = 'Unknown'
     }
 
     try {
@@ -107,11 +107,8 @@ function Get-TenantSmsPolicyState {
             -ErrorAction Stop
 
         $state = $null
-        if ($policy.PSObject.Properties.Name -contains 'state' -and $null -ne $policy.state) {
+        if ($policy.PSObject.Properties.Name -contains 'state') {
             $state = [string]$policy.state
-        }
-        elseif ($policy.PSObject.Properties.Name -contains 'State' -and $null -ne $policy.State) {
-            $state = [string]$policy.State
         }
         elseif ($policy.PSObject.Properties.Name -contains 'AdditionalProperties' -and
                 $null -ne $policy.AdditionalProperties -and
@@ -132,176 +129,10 @@ function Get-TenantSmsPolicyState {
 }
 
 # =========================
-# HELPER FUNCTIONS
-# =========================
-function Resolve-AuthMethodName {
-    param([string]$Method)
-    switch ($Method) {
-        'push'                 { return 'Microsoft Authenticator notification' }
-        'sms'                  { return 'SMS' }
-        'voiceMobile'          { return 'Phone call (mobile)' }
-        'voiceAlternateMobile' { return 'Phone call (alternate mobile)' }
-        'voiceOffice'          { return 'Phone call (office)' }
-        'oath'                 { return 'OATH token' }
-        'unknownFutureValue'   { return 'Unknown future value' }
-        'Unavailable'          { return 'Unavailable' }
-        default                { return $Method }
-    }
-}
-
-function Get-SampleSize {
-    while ($true) {
-        $inputValue = Read-Host "Enter number of users to sample"
-        if ([string]::IsNullOrWhiteSpace($inputValue)) {
-            Write-Host "A value is required." -ForegroundColor Red
-            continue
-        }
-        $parsedValue = 0
-        if ([int]::TryParse($inputValue, [ref]$parsedValue) -and $parsedValue -gt 0) {
-            return $parsedValue
-        }
-        Write-Host "Enter a whole number greater than 0." -ForegroundColor Red
-    }
-}
-
-function Get-DomainFilter {
-    while ($true) {
-        Write-Host ""
-        Write-Host "Optional domain filter" -ForegroundColor Cyan
-        Write-Host "Examples:"
-        Write-Host "  contoso.com"
-        Write-Host "  contoso.com,fabrikam.com"
-        Write-Host "  *   (all domains / no filter)"
-        $inputValue = Read-Host "Enter UPN domain filter"
-
-        if ([string]::IsNullOrWhiteSpace($inputValue) -or $inputValue -eq '*') {
-            return @()
-        }
-
-        $domains = $inputValue.Split(',') |
-            ForEach-Object { $_.Trim().ToLowerInvariant() } |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-            Sort-Object -Unique
-
-        if (@($domains).Count -gt 0) {
-            return @($domains)
-        }
-        Write-Host "Enter one or more valid domains, or * for all." -ForegroundColor Red
-    }
-}
-
-function Get-UpnFilter {
-    while ($true) {
-        Write-Host ""
-        Write-Host "Specific UPN filter" -ForegroundColor Cyan
-        Write-Host "Examples:"
-        Write-Host "  user1@contoso.com"
-        Write-Host "  user1@contoso.com,user2@contoso.com"
-        Write-Host "  *   (cancel / none)"
-        $inputValue = Read-Host "Enter one or more specific UPNs"
-
-        if ([string]::IsNullOrWhiteSpace($inputValue) -or $inputValue -eq '*') {
-            return @()
-        }
-
-        $upns = $inputValue.Split(',') |
-            ForEach-Object { $_.Trim().ToLowerInvariant() } |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-            Sort-Object -Unique
-
-        if (@($upns).Count -gt 0) {
-            return @($upns)
-        }
-        Write-Host "Enter one or more valid UPNs, or * to cancel." -ForegroundColor Red
-    }
-}
-
-function Test-StringPatternMatch {
-    param(
-        [string[]]$Values,
-        [string[]]$Patterns
-    )
-    foreach ($value in @($Values)) {
-        foreach ($pattern in @($Patterns)) {
-            if ([string]$value -match $pattern) {
-                return $true
-            }
-        }
-    }
-    return $false
-}
-
-function Get-RegistrationMethods {
-    param($RegistrationRecord)
-
-    $methods = @()
-    if ($null -eq $RegistrationRecord) {
-        return @()
-    }
-
-    if ($RegistrationRecord.PSObject.Properties.Name -contains 'MethodsRegistered' -and $null -ne $RegistrationRecord.MethodsRegistered) {
-        $methods = @($RegistrationRecord.MethodsRegistered)
-    }
-    elseif ($RegistrationRecord.PSObject.Properties.Name -contains 'methodsRegistered' -and $null -ne $RegistrationRecord.methodsRegistered) {
-        $methods = @($RegistrationRecord.methodsRegistered)
-    }
-    elseif ($RegistrationRecord.PSObject.Properties.Name -contains 'AdditionalProperties' -and
-            $null -ne $RegistrationRecord.AdditionalProperties -and
-            $RegistrationRecord.AdditionalProperties.ContainsKey('methodsRegistered')) {
-        $methods = @($RegistrationRecord.AdditionalProperties['methodsRegistered'])
-    }
-
-    return @($methods | ForEach-Object { [string]$_ })
-}
-
-function Get-RegistrationBool {
-    param(
-        $RegistrationRecord,
-        [string]$Lower,
-        [string]$Pascal
-    )
-
-    if ($null -eq $RegistrationRecord) {
-        return $null
-    }
-
-    if ($RegistrationRecord.PSObject.Properties.Name -contains $Pascal -and $null -ne $RegistrationRecord.$Pascal) {
-        return [bool]$RegistrationRecord.$Pascal
-    }
-    if ($RegistrationRecord.PSObject.Properties.Name -contains $Lower -and $null -ne $RegistrationRecord.$Lower) {
-        return [bool]$RegistrationRecord.$Lower
-    }
-    if ($RegistrationRecord.PSObject.Properties.Name -contains 'AdditionalProperties' -and
-        $null -ne $RegistrationRecord.AdditionalProperties -and
-        $RegistrationRecord.AdditionalProperties.ContainsKey($Lower)) {
-        return [bool]$RegistrationRecord.AdditionalProperties[$Lower]
-    }
-
-    return $null
-}
-
-function Get-SecurityQuestionStatus {
-    param(
-        $RegistrationRecord,
-        [bool]$ModernSecurityQuestionFound
-    )
-
-    $registeredMethods = Get-RegistrationMethods -RegistrationRecord $RegistrationRecord
-    $reportShowsSecurityQuestions = Test-StringPatternMatch `
-        -Values $registeredMethods `
-        -Patterns @('security.?question', '^securityQuestions$', '^securityQuestion$')
-
-    $isRegistered = $ModernSecurityQuestionFound -or $reportShowsSecurityQuestions
-
-    return [PSCustomObject]@{
-        SecurityQuestionsRegistered = $isRegistered
-    }
-}
-
 function Get-SmsMfaCapability {
     param(
         $RegistrationRecord,
-        [bool]$MobilePhoneRegistered,
+        [bool]$MobilePhoneRegisteredLive,
         [bool]$TenantSmsPolicyEnabled
     )
 
@@ -309,23 +140,21 @@ function Get-SmsMfaCapability {
     $isMfaRegistered = Get-RegistrationBool -RegistrationRecord $RegistrationRecord -Lower 'isMfaRegistered' -Pascal 'IsMfaRegistered'
 
     $registeredMethods = Get-RegistrationMethods -RegistrationRecord $RegistrationRecord
-    $smsMethodFromReport = Test-StringPatternMatch `
+
+    # Mobile-only matching. Office numbers are voice-only and are intentionally excluded.
+    $mobileFromReport = Test-StringPatternMatch `
         -Values $registeredMethods `
-        -Patterns @('mobilePhone', 'sms', 'phone')
+        -Patterns @('mobilePhone', '^sms$')
 
-    $smsMethodRegistered = ($MobilePhoneRegistered -or $smsMethodFromReport)
+    $mobilePhoneRegistered = ($MobilePhoneRegisteredLive -or $mobileFromReport)
 
-    # SMS MFA is considered available when:
-    #   user is MFA-capable (effective policy: legacy + modern), AND
-    #   an SMS/mobile phone method is registered, AND
-    #   the tenant SMS method policy is enabled
-    $smsMfaAvailable = ($isMfaCapable -eq $true -and $smsMethodRegistered -eq $true -and $TenantSmsPolicyEnabled -eq $true)
+    $smsMfaLikely = ($mobilePhoneRegistered -eq $true)
 
     return [PSCustomObject]@{
-        IsMfaCapable        = $isMfaCapable
-        IsMfaRegistered     = $isMfaRegistered
-        SmsMethodRegistered = $smsMethodRegistered
-        SmsMfaAvailable     = $smsMfaAvailable
+        IsMfaCapable          = $isMfaCapable
+        IsMfaRegistered       = $isMfaRegistered
+        MobilePhoneRegistered = $mobilePhoneRegistered
+        SmsMfaLikelyAvailable = $smsMfaLikely
     }
 }
 
@@ -402,7 +231,6 @@ function Get-UserAuthMethodInventory {
         switch ($phoneType) {
             'mobile' {
                 $methodNames.Add('Phone call (mobile)')
-                $methodNames.Add('SMS')
                 $mobileRegistered = $true
             }
             'alternateMobile' { $methodNames.Add('Phone call (alternate mobile)') }
@@ -523,13 +351,13 @@ function Export-AuditResults {
             -AutoSize `
             -FreezeTopRow `
             -BoldTopRow
-        Write-Host "`nExported Excel: $xlsxPath" -ForegroundColor Green
+
     }
     else {
         $csvPath = Join-Path $OutputFolder "$baseName.csv"
         $Results | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
-        Write-Host "`nImportExcel module not found. Exported CSV instead: $csvPath" -ForegroundColor Yellow
-    }
+
+        Write-Host "`nImportExcel module not found. Exported CSV: $csvPath" -ForegroundColor Yellow
 
     $txtPath = Join-Path $OutputFolder "$baseName.txt"
     $Results | Format-List * | Out-String -Width 4096 | Set-Content -Path $txtPath -Encoding UTF8
@@ -567,7 +395,6 @@ function Run-Audit {
         Write-Host "Domain filter: All domains" -ForegroundColor DarkCyan
     }
 
-    # Tenant SMS policy is evaluated ONCE per run for performance.
     $tenantSms = Get-TenantSmsPolicyState
     Write-Host "Tenant SMS method policy state: $($tenantSms.SmsPolicyState)" -ForegroundColor DarkCyan
 
@@ -655,7 +482,7 @@ function Run-Audit {
             $phones     = Get-UserPhoneMethods -UserId $user.Id
             $authInv    = Get-UserAuthMethodInventory -UserId $user.Id -PhoneMethods @($phones)
             $sqStatus   = Get-SecurityQuestionStatus -RegistrationRecord $reg -ModernSecurityQuestionFound $authInv.ModernSecurityQuestion
-            $smsCap     = Get-SmsMfaCapability -RegistrationRecord $reg -MobilePhoneRegistered $authInv.MobilePhoneRegistered -TenantSmsPolicyEnabled $tenantSms.SmsPolicyEnabled
+            $smsCap     = Get-SmsMfaCapability -RegistrationRecord $reg -MobilePhoneRegisteredLive $authInv.MobilePhoneRegistered -TenantSmsPolicyEnabled $tenantSms.SmsPolicyEnabled
         }
         catch {
             Write-Host "Failed processing $($user.UserPrincipalName): $($_.Exception.Message)" -ForegroundColor Red
@@ -669,11 +496,11 @@ function Run-Audit {
                 AccountEnabled              = $user.AccountEnabled
                 Domain                      = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' })
                 PerUserMfaState             = $perUserMfa
-                TenantSmsPolicyState        = $tenantSms.SmsPolicyState
                 IsMfaRegistered             = $smsCap.IsMfaRegistered
                 IsMfaCapable                = $smsCap.IsMfaCapable
-                SmsMethodRegistered         = $smsCap.SmsMethodRegistered
-                SmsMfaAvailable             = $smsCap.SmsMfaAvailable
+                TenantSmsPolicyState        = $tenantSms.SmsPolicyState
+                MobilePhoneRegistered       = $smsCap.MobilePhoneRegistered
+                SmsMfaLikelyAvailable       = $smsCap.SmsMfaLikelyAvailable
                 SecurityQuestionsRegistered = $sqStatus.SecurityQuestionsRegistered
                 AllRegisteredAuthMethods    = $authInv.AllRegisteredAuthMethods
                 PhoneType                   = 'None'
@@ -698,11 +525,11 @@ function Run-Audit {
                     AccountEnabled              = $user.AccountEnabled
                     Domain                      = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' })
                     PerUserMfaState             = $perUserMfa
-                    TenantSmsPolicyState        = $tenantSms.SmsPolicyState
                     IsMfaRegistered             = $smsCap.IsMfaRegistered
                     IsMfaCapable                = $smsCap.IsMfaCapable
-                    SmsMethodRegistered         = $smsCap.SmsMethodRegistered
-                    SmsMfaAvailable             = $smsCap.SmsMfaAvailable
+                    TenantSmsPolicyState        = $tenantSms.SmsPolicyState
+                    MobilePhoneRegistered       = $smsCap.MobilePhoneRegistered
+                    SmsMfaLikelyAvailable       = $smsCap.SmsMfaLikelyAvailable
                     SecurityQuestionsRegistered = $sqStatus.SecurityQuestionsRegistered
                     AllRegisteredAuthMethods    = $authInv.AllRegisteredAuthMethods
                     PhoneType                   = $mapped
