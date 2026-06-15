@@ -441,35 +441,6 @@ function Export-AuditResults {
     $Results | Format-List * | Out-String -Width 4096 | Set-Content -Path $txtPath -Encoding UTF8
     Write-Host "Exported text: $txtPath" -ForegroundColor Green
 }
-    param(
-        [Parameter(Mandatory = $true)][object[]]$Results,
-        [Parameter(Mandatory = $true)][string]$ModeLabel,
-        [Parameter(Mandatory = $true)][ValidateSet('Enabled','All')][string]$AccountScope,
-        [string[]]$DomainFilter = @(),
-        [string[]]$UpnFilter = @()
-    )
-    if (@($Results).Count -eq 0) { Write-Host "No results to export." -ForegroundColor Yellow; return }
-    if (-not (Test-Path $OutputFolder)) {
-        New-Item -Path $OutputFolder -ItemType Directory -Force | Out-Null
-    }
-    $timestamp = Get-Date -Format 'yyyyMMdd_HHmm'
-    $safeModeLabel = $ModeLabel -replace '[^A-Za-z0-9]', ''
-    $scopeLabel = if (@($UpnFilter).Count -gt 0) { 'SpecificUPNs' } elseif (@($DomainFilter).Count -gt 0) { (($DomainFilter -join '_') -replace '[^A-Za-z0-9_\-]', '') } else { 'AllDomains' }
-    $baseName = "AuthAudit_${AccountScope}_${safeModeLabel}_${scopeLabel}_$timestamp"
-    if ($UseExcel) {
-        $xlsxPath = Join-Path $OutputFolder "$baseName.xlsx"
-        $visibleResults = @($Results | Select-Object UserPrincipalName,Email,AccountEnabled,Domain,PerUserMfaState,SignInMode,UserDefaultSignInMethod,SystemPreferredEnabled,IsMfaRegistered,IsMfaCapable,TenantSmsPolicyState,MobilePhoneRegistered,SmsMfaLikelyAvailable,SecurityQuestionsRegistered,AllRegisteredAuthMethods,PhoneTypes,PhoneNumbers,MethodCount,MethodCountExcludingAltOffice,HasMicrosoftAuthenticator,HasTwoMethodsExcludingAltOffice)
-        $visibleResults | Export-Excel -Path $xlsxPath -WorksheetName 'AuditResults' -TableName ("AuthAudit{0}{1}" -f $AccountScope, $safeModeLabel) -TableStyle Medium6 -AutoSize -FreezeTopRow -BoldTopRow
-    }
-    else {
-        $csvPath = Join-Path $OutputFolder "$baseName.csv"
-        $visibleResults | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
-        Write-Host "`nImportExcel module not found. Exported CSV: $csvPath" -ForegroundColor Yellow
-    }
-    $txtPath = Join-Path $OutputFolder "$baseName.txt"
-    $Results | Format-List * | Out-String -Width 4096 | Set-Content -Path $txtPath -Encoding UTF8
-    Write-Host "Exported text: $txtPath" -ForegroundColor Green
-}
 function Run-Audit {
     param(
         [ValidateSet('Sample','Full','Targeted')][string]$Mode,
