@@ -280,7 +280,6 @@ function Get-TargetedUsers {
     }
     return @($users)
 }
-
 function Get-RegistrationLookup {
     param(
         [string]$Mode,
@@ -313,7 +312,6 @@ function Get-RegistrationLookup {
 
     return $registrationLookup
 }
-
 function Export-AuditResults {
     param(
         [Parameter(Mandatory = $true)][object[]]$Results,
@@ -367,8 +365,7 @@ function Export-AuditResults {
 }
 function Run-Audit {
     param(
-        [ValidateSet('Sample','Full','Targeted')][string]$Mode,
-        [ValidateSet('Enabled','All')][string]$AccountScope,
+        [string]$Mode = 'Full',
         [int]$SampleSize = 0,
         [string[]]$DomainFilter = @(),
         [string[]]$UpnFilter = @()
@@ -492,7 +489,7 @@ function Run-Audit {
             continue
         }
 
-$results.Add([PSCustomObject]@{UserPrincipalName = $user.UserPrincipalName;Email = $user.Mail;AccountEnabled = $user.AccountEnabled;Domain = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' });PerUserMfaState = $perUserMfa;SignInMode = $signInView.SignInMode;UserDefaultSignInMethod = $signInView.UserDefaultSignInMethod;SystemPreferredEnabled = $signInView.SystemPreferredEnabled;IsMfaRegistered = $smsCap.IsMfaRegistered;IsMfaCapable = $smsCap.IsMfaCapable;TenantSmsPolicyState = $tenantSms.SmsPolicyState;MobilePhoneRegistered = $smsCap.MobilePhoneRegistered;SmsMfaLikelyAvailable = $smsCap.SmsMfaLikelyAvailable;SecurityQuestionsRegistered = $sqStatus.SecurityQuestionsRegistered;AllRegisteredAuthMethods = $authInv.AllRegisteredAuthMethods;CountableRegisteredAuthMethods = $authInv.CountableRegisteredAuthMethods;CountableRegisteredAuthMethodCount = $authInv.CountableRegisteredAuthMethodCount;HasTwoOrMoreCountableAuthMethods = $authInv.HasTwoOrMoreCountableAuthMethods;PhoneTypes = $phoneSummary.PhoneTypes;PhoneAccessMode = $phoneSummary.PhoneAccessMode})
+$results.Add([PSCustomObject]@{UserPrincipalName = $user.UserPrincipalName;Email = $user.Mail;AccountEnabled = $user.AccountEnabled;Domain = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' });PerUserMfaState = $perUserMfa;SignInMode = $signInView.SignInMode;UserDefaultSignInMethod = $signInView.UserDefaultSignInMethod;SystemPreferredEnabled = $signInView.SystemPreferredEnabled;IsMfaRegistered = $smsCap.IsMfaRegistered;IsMfaCapable = $smsCap.IsMfaCapable;TenantSmsPolicyState = $tenantSms.SmsPolicyState;MobilePhoneRegistered = $smsCap.MobilePhoneRegistered;SmsMfaLikelyAvailable = $smsCap.SmsMfaLikelyAvailable;SecurityQuestionsRegistered = $sqStatus.SecurityQuestionsRegistered;AllRegisteredAuthMethods = $authInv.AllRegisteredAuthMethods;CountableRegisteredAuthMethodCount = $authInv.CountableRegisteredAuthMethodCount;'Migration Ready' = $authInv.HasTwoOrMoreCountableAuthMethods;PhoneTypes = $phoneSummary.PhoneTypes;PhoneAccessMode = $phoneSummary.PhoneAccessMode})
     }
 
     Write-Progress -Activity "Auditing Users" -Completed
