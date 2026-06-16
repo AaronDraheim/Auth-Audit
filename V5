@@ -202,7 +202,7 @@ function Get-UpnFilter {
         Write-Host "Enter one or more valid UPNs, or * to cancel." -ForegroundColor Red
     }
 }
-function Get-UserPhoneSummary {param([Parameter()][object[]]$PhoneMethods = @())$phoneTypes = [System.Collections.Generic.List[string]]::new();$phoneNumbers = [System.Collections.Generic.List[string]]::new();foreach ($phone in @($PhoneMethods)) {$phoneType = $null;if ($phone.PSObject.Properties.Name -contains 'PhoneType' -and $null -ne $phone.PhoneType) {$phoneType = [string]$phone.PhoneType}elseif ($phone.PSObject.Properties.Name -contains 'AdditionalProperties' -and $null -ne $phone.AdditionalProperties -and $phone.AdditionalProperties.ContainsKey('phoneType')) {$phoneType = [string]$phone.AdditionalProperties['phoneType']}elseif ($script:PhoneTypeMap.ContainsKey([string]$phone.Id)) {$phoneType = $script:PhoneTypeMap[[string]$phone.Id]}if ([string]::IsNullOrWhiteSpace($phoneType)) {$phoneType = 'Unknown'}$phoneTypes.Add($phoneType);if ($phone.PSObject.Properties.Name -contains 'PhoneNumber' -and -not [string]::IsNullOrWhiteSpace([string]$phone.PhoneNumber)) {$phoneNumbers.Add([string]$phone.PhoneNumber)}}return [PSCustomObject]@{PhoneTypes = $(if ($phoneTypes.Count -gt 0) { ($phoneTypes | Sort-Object -Unique) -join '; ' } else { 'None' });PhoneNumbers = $(if ($phoneNumbers.Count -gt 0) { ($phoneNumbers | Sort-Object -Unique) -join '; ' } else { '' })}}
+function Get-UserPhoneSummary {param([Parameter()][object[]]$PhoneMethods = @())$phoneTypes = [System.Collections.Generic.List[string]]::new();$phoneNumbers = [System.Collections.Generic.List[string]]::new();$hasMobile = $false;$hasAlternateMobile = $false;$hasOffice = $false;foreach ($phone in @($PhoneMethods)) {$phoneType = $null;if ($phone.PSObject.Properties.Name -contains 'PhoneType' -and $null -ne $phone.PhoneType) {$phoneType = [string]$phone.PhoneType}elseif ($phone.PSObject.Properties.Name -contains 'AdditionalProperties' -and $null -ne $phone.AdditionalProperties -and $phone.AdditionalProperties.ContainsKey('phoneType')) {$phoneType = [string]$phone.AdditionalProperties['phoneType']}elseif ($script:PhoneTypeMap.ContainsKey([string]$phone.Id)) {$phoneType = $script:PhoneTypeMap[[string]$phone.Id]}if ([string]::IsNullOrWhiteSpace($phoneType)) {$phoneType = 'Unknown'}$phoneTypes.Add($phoneType);switch ($phoneType) {'mobile' {$hasMobile = $true}'alternateMobile' {$hasAlternateMobile = $true}'office' {$hasOffice = $true}}if ($phone.PSObject.Properties.Name -contains 'PhoneNumber' -and -not [string]::IsNullOrWhiteSpace([string]$phone.PhoneNumber)) {$phoneNumbers.Add([string]$phone.PhoneNumber)}}$phoneAccessMode = if ($hasMobile) { 'SMS and voice call (mobile)' } elseif ($hasAlternateMobile -or $hasOffice) { 'Voice call only' } else { 'None' };return [PSCustomObject]@{PhoneTypes = $(if ($phoneTypes.Count -gt 0) { ($phoneTypes | Sort-Object -Unique) -join '; ' } else { 'None' });PhoneNumbers = $(if ($phoneNumbers.Count -gt 0) { ($phoneNumbers | Sort-Object -Unique) -join '; ' } else { '' });PhoneAccessMode = $phoneAccessMode}}
 function Get-SmsMfaCapability {
     param(
         $RegistrationRecord,
@@ -242,83 +242,7 @@ function Get-UserPhoneMethods {
     }
 }
 
-function Get-UserAuthMethodInventory {
-    param(
-        [Parameter(Mandatory = $true)][string]$UserId,
-        [Parameter()][object[]]$PhoneMethods = @()
-    )
-
-    $methodNames      = [System.Collections.Generic.List[string]]::new()
-    $modernSQ         = $false
-    $mobileRegistered = $false
-
-    try {
-        $methods = @(Get-MgUserAuthenticationMethod -UserId $UserId -ErrorAction Stop)
-        foreach ($method in $methods) {
-            $odataType = $null
-            if ($method.PSObject.Properties.Name -contains 'AdditionalProperties' -and
-                $null -ne $method.AdditionalProperties -and
-                $method.AdditionalProperties.ContainsKey('@odata.type')) {
-                $odataType = [string]$method.AdditionalProperties['@odata.type']
-            }
-            elseif ($method.PSObject.Properties.Name -contains '@odata.type') {
-                $odataType = [string]$method.'@odata.type'
-            }
-
-            switch ($odataType) {
-                '#microsoft.graph.microsoftAuthenticatorAuthenticationMethod'             { $methodNames.Add('Microsoft Authenticator') }
-                '#microsoft.graph.passwordlessMicrosoftAuthenticatorAuthenticationMethod' { $methodNames.Add('Authenticator (passwordless)') }
-                '#microsoft.graph.fido2AuthenticationMethod'                             { $methodNames.Add('FIDO2 security key') }
-                '#microsoft.graph.windowsHelloForBusinessAuthenticationMethod'           { $methodNames.Add('Windows Hello for Business') }
-                '#microsoft.graph.softwareOathAuthenticationMethod'                      { $methodNames.Add('Software OATH') }
-                '#microsoft.graph.emailAuthenticationMethod'                             { $methodNames.Add('Email') }
-                '#microsoft.graph.passwordAuthenticationMethod'                          { $methodNames.Add('Password') }
-                '#microsoft.graph.temporaryAccessPassAuthenticationMethod'               { $methodNames.Add('Temporary Access Pass') }
-                '#microsoft.graph.platformCredentialAuthenticationMethod'                { $methodNames.Add('Passkey (platform credential)') }
-                '#microsoft.graph.securityQuestionAuthenticationMethod' {
-                    $methodNames.Add('Security questions')
-                    $modernSQ = $true
-                }
-                '#microsoft.graph.phoneAuthenticationMethod' {
-                    # normalized below using Get-MgUserAuthenticationPhoneMethod
-                }
-            }
-        }
-    }
-    catch {}
-
-    foreach ($phone in @($PhoneMethods)) {
-        $phoneType = $null
-
-        if ($phone.PSObject.Properties.Name -contains 'PhoneType' -and $null -ne $phone.PhoneType) {
-            $phoneType = [string]$phone.PhoneType
-        }
-        elseif ($phone.PSObject.Properties.Name -contains 'AdditionalProperties' -and
-                $null -ne $phone.AdditionalProperties -and
-                $phone.AdditionalProperties.ContainsKey('phoneType')) {
-            $phoneType = [string]$phone.AdditionalProperties['phoneType']
-        }
-        elseif ($script:PhoneTypeMap.ContainsKey([string]$phone.Id)) {
-            $phoneType = $script:PhoneTypeMap[[string]$phone.Id]
-        }
-
-        switch ($phoneType) {
-            'mobile' {
-                $methodNames.Add('Phone call (mobile)')
-                $mobileRegistered = $true
-            }
-            'alternateMobile' { $methodNames.Add('Phone call (alternate mobile)') }
-            'office'          { $methodNames.Add('Phone call (office)') }
-            default           { $methodNames.Add('Phone') }
-        }
-    }
-
-    return [PSCustomObject]@{
-        AllRegisteredAuthMethods = ($methodNames | Sort-Object -Unique) -join '; '
-        ModernSecurityQuestion   = $modernSQ
-        MobilePhoneRegistered    = $mobileRegistered
-    }
-}
+function Get-UserAuthMethodInventory {param([Parameter(Mandatory = $true)][string]$UserId,[Parameter()][object[]]$PhoneMethods = @())$methodNames = [System.Collections.Generic.List[string]]::new();$countableMethodNames = [System.Collections.Generic.List[string]]::new();$modernSQ = $false;$mobileRegistered = $false;try {$methods = @(Get-MgUserAuthenticationMethod -UserId $UserId -ErrorAction Stop);foreach ($method in $methods) {$odataType = $null;if ($method.PSObject.Properties.Name -contains 'AdditionalProperties' -and $null -ne $method.AdditionalProperties -and $method.AdditionalProperties.ContainsKey('@odata.type')) {$odataType = [string]$method.AdditionalProperties['@odata.type']}elseif ($method.PSObject.Properties.Name -contains '@odata.type') {$odataType = [string]$method.'@odata.type'}switch ($odataType) {'#microsoft.graph.microsoftAuthenticatorAuthenticationMethod' {$methodNames.Add('Microsoft Authenticator');$countableMethodNames.Add('Microsoft Authenticator')}'#microsoft.graph.passwordlessMicrosoftAuthenticatorAuthenticationMethod' {$methodNames.Add('Authenticator (passwordless)');$countableMethodNames.Add('Authenticator (passwordless)')}'#microsoft.graph.fido2AuthenticationMethod' {$methodNames.Add('FIDO2 security key');$countableMethodNames.Add('FIDO2 security key')}'#microsoft.graph.windowsHelloForBusinessAuthenticationMethod' {$methodNames.Add('Windows Hello for Business');$countableMethodNames.Add('Windows Hello for Business')}'#microsoft.graph.softwareOathAuthenticationMethod' {$methodNames.Add('Software OATH');$countableMethodNames.Add('Software OATH')}'#microsoft.graph.emailAuthenticationMethod' {$methodNames.Add('Email');$countableMethodNames.Add('Email')}'#microsoft.graph.passwordAuthenticationMethod' {$methodNames.Add('Password');$countableMethodNames.Add('Password')}'#microsoft.graph.temporaryAccessPassAuthenticationMethod' {$methodNames.Add('Temporary Access Pass');$countableMethodNames.Add('Temporary Access Pass')}'#microsoft.graph.platformCredentialAuthenticationMethod' {$methodNames.Add('Passkey (platform credential)');$countableMethodNames.Add('Passkey (platform credential)')}'#microsoft.graph.securityQuestionAuthenticationMethod' {$methodNames.Add('Security questions');$countableMethodNames.Add('Security questions');$modernSQ = $true}'#microsoft.graph.phoneAuthenticationMethod' {}}}}catch {}foreach ($phone in @($PhoneMethods)) {$phoneType = $null;if ($phone.PSObject.Properties.Name -contains 'PhoneType' -and $null -ne $phone.PhoneType) {$phoneType = [string]$phone.PhoneType}elseif ($phone.PSObject.Properties.Name -contains 'AdditionalProperties' -and $null -ne $phone.AdditionalProperties -and $phone.AdditionalProperties.ContainsKey('phoneType')) {$phoneType = [string]$phone.AdditionalProperties['phoneType']}elseif ($script:PhoneTypeMap.ContainsKey([string]$phone.Id)) {$phoneType = $script:PhoneTypeMap[[string]$phone.Id]}switch ($phoneType) {'mobile' {$methodNames.Add('Phone call (mobile)');$countableMethodNames.Add('Phone call (mobile)');$mobileRegistered = $true}'alternateMobile' {$methodNames.Add('Phone call (alternate mobile)')}'office' {$methodNames.Add('Phone call (office)')}default {$methodNames.Add('Phone');$countableMethodNames.Add('Phone')}}}$uniqueCountableMethods = @($countableMethodNames | Sort-Object -Unique);return [PSCustomObject]@{AllRegisteredAuthMethods = ($methodNames | Sort-Object -Unique) -join '; ';ModernSecurityQuestion = $modernSQ;MobilePhoneRegistered = $mobileRegistered;CountableRegisteredAuthMethods = ($uniqueCountableMethods -join '; ');CountableRegisteredAuthMethodCount = $uniqueCountableMethods.Count;HasTwoOrMoreRegisteredAuthMethodsExcludingAlternateMobileAndOffice = ($uniqueCountableMethods.Count -ge 2)}}
 
 function Get-PerUserMfaState {
     param([Parameter(Mandatory = $true)][string]$UserId)
@@ -568,7 +492,7 @@ function Run-Audit {
             continue
         }
 
-$results.Add([PSCustomObject]@{UserPrincipalName = $user.UserPrincipalName;Email = $user.Mail;AccountEnabled = $user.AccountEnabled;Domain = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' });PerUserMfaState = $perUserMfa;SignInMode = $signInView.SignInMode;UserDefaultSignInMethod = $signInView.UserDefaultSignInMethod;SystemPreferredEnabled = $signInView.SystemPreferredEnabled;IsMfaRegistered = $smsCap.IsMfaRegistered;IsMfaCapable = $smsCap.IsMfaCapable;TenantSmsPolicyState = $tenantSms.SmsPolicyState;MobilePhoneRegistered = $smsCap.MobilePhoneRegistered;SmsMfaLikelyAvailable = $smsCap.SmsMfaLikelyAvailable;SecurityQuestionsRegistered = $sqStatus.SecurityQuestionsRegistered;AllRegisteredAuthMethods = $authInv.AllRegisteredAuthMethods;PhoneTypes = $phoneSummary.PhoneTypes;PhoneNumbers = $phoneSummary.PhoneNumbers})
+$results.Add([PSCustomObject]@{UserPrincipalName = $user.UserPrincipalName;Email = $user.Mail;AccountEnabled = $user.AccountEnabled;Domain = $(if ($user.UserPrincipalName -match '@') { $user.UserPrincipalName.Split('@')[-1] } else { '' });PerUserMfaState = $perUserMfa;SignInMode = $signInView.SignInMode;UserDefaultSignInMethod = $signInView.UserDefaultSignInMethod;SystemPreferredEnabled = $signInView.SystemPreferredEnabled;IsMfaRegistered = $smsCap.IsMfaRegistered;IsMfaCapable = $smsCap.IsMfaCapable;TenantSmsPolicyState = $tenantSms.SmsPolicyState;MobilePhoneRegistered = $smsCap.MobilePhoneRegistered;SmsMfaLikelyAvailable = $smsCap.SmsMfaLikelyAvailable;SecurityQuestionsRegistered = $sqStatus.SecurityQuestionsRegistered;AllRegisteredAuthMethods = $authInv.AllRegisteredAuthMethods;CountableRegisteredAuthMethods = $authInv.CountableRegisteredAuthMethods;CountableRegisteredAuthMethodCount = $authInv.CountableRegisteredAuthMethodCount;HasTwoOrMoreRegisteredAuthMethodsExcludingAlternateMobileAndOffice = $authInv.HasTwoOrMoreRegisteredAuthMethodsExcludingAlternateMobileAndOffice;PhoneTypes = $phoneSummary.PhoneTypes;PhoneNumbers = $phoneSummary.PhoneNumbers;PhoneAccessMode = $phoneSummary.PhoneAccessMode})
     }
 
     Write-Progress -Activity "Auditing Users" -Completed
