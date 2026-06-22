@@ -240,7 +240,7 @@ function Get-UserPhoneMethods {
     }
     catch {
         return @()
-    }A
+    }
 }	
 
 function Get-UserAuthMethodInventory {param([Parameter(Mandatory = $true)][string]$UserId,[Parameter()][object[]]$PhoneMethods = @())$methodNames = [System.Collections.Generic.List[string]]::new();$countableMethodNames = [System.Collections.Generic.List[string]]::new();$modernSQ = $false;$mobileRegistered = $false;$fido2Found = $false;$hardwareOathFound = $false;try {$methods = @(Get-MgUserAuthenticationMethod -UserId $UserId -ErrorAction Stop);foreach ($method in $methods) {$odataType = $null;if ($method.PSObject.Properties.Name -contains 'AdditionalProperties' -and $null -ne $method.AdditionalProperties -and $method.AdditionalProperties.ContainsKey('@odata.type')) {$odataType = [string]$method.AdditionalProperties['@odata.type']}elseif ($method.PSObject.Properties.Name -contains '@odata.type') {$odataType = [string]$method.'@odata.type'}switch ($odataType) {'#microsoft.graph.microsoftAuthenticatorAuthenticationMethod' {$methodNames.Add('Microsoft Authenticator');$countableMethodNames.Add('Microsoft Authenticator')}'#microsoft.graph.passwordlessMicrosoftAuthenticatorAuthenticationMethod' {$methodNames.Add('Authenticator (passwordless)');$countableMethodNames.Add('Authenticator (passwordless)')}'#microsoft.graph.fido2AuthenticationMethod' {$methodNames.Add('FIDO2 security key');$countableMethodNames.Add('FIDO2 security key');$fido2Found = $true}'#microsoft.graph.hardwareOathAuthenticationMethod' {$methodNames.Add('Hardware OATH token');$countableMethodNames.Add('Hardware OATH token');$hardwareOathFound = $true}'#microsoft.graph.windowsHelloForBusinessAuthenticationMethod' {$methodNames.Add('Windows Hello for Business');$countableMethodNames.Add('Windows Hello for Business')}'#microsoft.graph.softwareOathAuthenticationMethod' {$methodNames.Add('Software OATH');$countableMethodNames.Add('Software OATH')}'#microsoft.graph.emailAuthenticationMethod' {$methodNames.Add('Email');$countableMethodNames.Add('Email')}'#microsoft.graph.temporaryAccessPassAuthenticationMethod' {$methodNames.Add('Temporary Access Pass');$countableMethodNames.Add('Temporary Access Pass')}'#microsoft.graph.platformCredentialAuthenticationMethod' {$methodNames.Add('Passkey (platform credential)');$countableMethodNames.Add('Passkey (platform credential)')}'#microsoft.graph.securityQuestionAuthenticationMethod' {$methodNames.Add('Security questions');$countableMethodNames.Add('Security questions');$modernSQ = $true}'#microsoft.graph.phoneAuthenticationMethod' {}}}}catch {}if (-not $fido2Found) {try {$fido2Methods = @(Get-MgUserAuthenticationFido2Method -UserId $UserId -ErrorAction Stop);if (@($fido2Methods).Count -gt 0) {$methodNames.Add('FIDO2 security key');$countableMethodNames.Add('FIDO2 security key')}}catch {}}if (-not $hardwareOathFound) {try {$hardwareOathResponse = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/users/$UserId/authentication/hardwareOathMethods" -OutputType PSObject -ErrorAction Stop;$hardwareOathMethods = @();if ($null -ne $hardwareOathResponse.value) {$hardwareOathMethods = @($hardwareOathResponse.value)}elseif ($null -ne $hardwareOathResponse) {$hardwareOathMethods = @($hardwareOathResponse)}if (@($hardwareOathMethods).Count -gt 0) {$methodNames.Add('Hardware OATH token');$countableMethodNames.Add('Hardware OATH token')}}catch {}}foreach ($phone in @($PhoneMethods)) {$phoneType = $null;if ($phone.PSObject.Properties.Name -contains 'PhoneType' -and $null -ne $phone.PhoneType) {$phoneType = [string]$phone.PhoneType}elseif ($phone.PSObject.Properties.Name -contains 'AdditionalProperties' -and $null -ne $phone.AdditionalProperties -and $phone.AdditionalProperties.ContainsKey('phoneType')) {$phoneType = [string]$phone.AdditionalProperties['phoneType']}elseif ($script:PhoneTypeMap.ContainsKey([string]$phone.Id)) {$phoneType = $script:PhoneTypeMap[[string]$phone.Id]}switch ($phoneType) {'mobile' {$methodNames.Add('Phone call (mobile)');$countableMethodNames.Add('Phone call (mobile)');$mobileRegistered = $true}'alternateMobile' {$methodNames.Add('Phone call (alternate mobile)')}'office' {$methodNames.Add('Phone call (office)')}default {$methodNames.Add('Phone');$countableMethodNames.Add('Phone')}}}$uniqueCountableMethods = @($countableMethodNames | Sort-Object -Unique);return [PSCustomObject]@{AllRegisteredAuthMethods = ($methodNames | Sort-Object -Unique) -join '; ';ModernSecurityQuestion = $modernSQ;MobilePhoneRegistered = $mobileRegistered;CountableRegisteredAuthMethods = ($uniqueCountableMethods -join '; ');CountableRegisteredAuthMethodCount = $uniqueCountableMethods.Count;HasTwoOrMoreCountableAuthMethods = ($uniqueCountableMethods.Count -ge 2)}}
@@ -367,6 +367,7 @@ function Export-AuditResults {
 function Run-Audit {
     param(
         [string]$Mode = 'Full',
+        [Parameter(Mandatory = $true)][ValidateSet('Enabled','All')][string]$AccountScope,
         [int]$SampleSize = 0,
         [string[]]$DomainFilter = @(),
         [string[]]$UpnFilter = @()
@@ -553,7 +554,7 @@ function Show-AuditSubMenu {
 # MAIN MENU
 # =========================
 # =========================
-while ($true) {
+:mainLoop while ($true) {
     Write-Host "`n===== MAIN MENU =====" -ForegroundColor Cyan
     Write-Host "1. Disconnect / Reconnect Microsoft Graph"
     Write-Host "2. Audit Enabled Accounts"
@@ -569,10 +570,11 @@ while ($true) {
         'Q' {
             Disconnect-GraphSession
             Write-Host "Exiting..." -ForegroundColor Yellow
-            break
+            break mainLoop
         }
         default {
             Write-Host "Invalid selection." -ForegroundColor Red
         }
     }
 }
+
