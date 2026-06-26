@@ -23,9 +23,9 @@ Import-Module Microsoft.Graph.Users -ErrorAction Stop
 Import-Module Microsoft.Graph.Identity.SignIns -ErrorAction Stop
 Import-Module Microsoft.Graph.Reports -ErrorAction Stop
 
+# Optional Excel export support. If ImportExcel is unavailable, results fall back to CSV and TXT output.
 $UseExcel = $false
 try {
-# ImportExcel is optional and enables native Excel export when available.
     if (Get-Module -ListAvailable -Name ImportExcel) {
         Import-Module ImportExcel -ErrorAction Stop
         $UseExcel = $true
@@ -132,10 +132,12 @@ function Get-TenantSmsPolicyState {
 }
 
 # =========================
+# Authentication registration report helper functions used to safely read report fields across property naming variations.
 function Get-RegistrationBool {param($RegistrationRecord,[string]$Lower,[string]$Pascal)if ($null -eq $RegistrationRecord) { return $false }if ($RegistrationRecord.PSObject.Properties.Name -contains $Lower -and $null -ne $RegistrationRecord.$Lower) { return [bool]$RegistrationRecord.$Lower }if ($RegistrationRecord.PSObject.Properties.Name -contains $Pascal -and $null -ne $RegistrationRecord.$Pascal) { return [bool]$RegistrationRecord.$Pascal }return $false}
 function Get-RegistrationMethods {param($RegistrationRecord)if ($null -eq $RegistrationRecord) { return @() }if ($RegistrationRecord.PSObject.Properties.Name -contains 'methodsRegistered' -and $null -ne $RegistrationRecord.methodsRegistered) { return @($RegistrationRecord.methodsRegistered) }if ($RegistrationRecord.PSObject.Properties.Name -contains 'MethodsRegistered' -and $null -ne $RegistrationRecord.MethodsRegistered) { return @($RegistrationRecord.MethodsRegistered) }return @()}
 function Test-StringPatternMatch {param([Parameter()][object[]]$Values = @(),[Parameter()][string[]]$Patterns = @())foreach ($value in @($Values)) {$text = [string]$value;foreach ($pattern in @($Patterns)) {if ($text -match $pattern) { return $true }}}return $false}
 function Get-SecurityQuestionStatus {param($RegistrationRecord,[bool]$ModernSecurityQuestionFound)$registered = $ModernSecurityQuestionFound;if (-not $registered -and $null -ne $RegistrationRecord) {$methods = Get-RegistrationMethods -RegistrationRecord $RegistrationRecord;foreach ($m in @($methods)) {if ([string]$m -match 'security' -or [string]$m -match 'question') {$registered = $true;break}}}return [PSCustomObject]@{SecurityQuestionsRegistered = $registered}}
+# Input helper functions collect sample size, domain filters, and specific UPN filters for scoped audit runs.
 function Get-SampleSize {
     while ($true) {
         $inputValue = Read-Host "Enter number of users to sample"
@@ -205,6 +207,7 @@ function Get-UpnFilter {
         Write-Host "Enter one or more valid UPNs, or * to cancel." -ForegroundColor Red
     }
 }
+# Phone method helper functions normalize phone types and determine whether mobile SMS/voice is available.
 function Get-UserPhoneSummary {param([Parameter()][object[]]$PhoneMethods = @())$phoneTypes = [System.Collections.Generic.List[string]]::new();$phoneNumbers = [System.Collections.Generic.List[string]]::new();$hasMobile = $false;$hasAlternateMobile = $false;$hasOffice = $false;foreach ($phone in @($PhoneMethods)) {$phoneType = $null;if ($phone.PSObject.Properties.Name -contains 'PhoneType' -and $null -ne $phone.PhoneType) {$phoneType = [string]$phone.PhoneType}elseif ($phone.PSObject.Properties.Name -contains 'AdditionalProperties' -and $null -ne $phone.AdditionalProperties -and $phone.AdditionalProperties.ContainsKey('phoneType')) {$phoneType = [string]$phone.AdditionalProperties['phoneType']}elseif ($script:PhoneTypeMap.ContainsKey([string]$phone.Id)) {$phoneType = $script:PhoneTypeMap[[string]$phone.Id]}if ([string]::IsNullOrWhiteSpace($phoneType)) {$phoneType = 'Unknown'}$phoneTypes.Add($phoneType);switch ($phoneType) {'mobile' {$hasMobile = $true}'alternateMobile' {$hasAlternateMobile = $true}'office' {$hasOffice = $true}}if ($phone.PSObject.Properties.Name -contains 'PhoneNumber' -and -not [string]::IsNullOrWhiteSpace([string]$phone.PhoneNumber)) {$phoneNumbers.Add([string]$phone.PhoneNumber)}}$phoneAccessMode = if ($hasMobile) { 'SMS and voice call (mobile)' } elseif ($hasAlternateMobile -or $hasOffice) { 'Voice call only' } else { 'None' };return [PSCustomObject]@{PhoneTypes = $(if ($phoneTypes.Count -gt 0) { ($phoneTypes | Sort-Object -Unique) -join '; ' } else { 'None' });PhoneNumbers = $(if ($phoneNumbers.Count -gt 0) { ($phoneNumbers | Sort-Object -Unique) -join '; ' } else { '' });PhoneAccessMode = $phoneAccessMode}}
 function Get-SmsMfaCapability {
     param(
@@ -245,6 +248,7 @@ function Get-UserPhoneMethods {
     }
 }	
 
+# Authentication method inventory builds the registered-method list, migration readiness, and MFA Ready status.
 function Get-UserAuthMethodInventory {
     param(
         [Parameter(Mandatory = $true)][string]$UserId,
@@ -411,6 +415,7 @@ function Get-UserAuthMethodInventory {
     }
 }
 
+# Per-user MFA and sign-in preference helpers retrieve legacy MFA state and preferred secondary authentication details.
 function Get-PerUserMfaState {
     param([Parameter(Mandatory = $true)][string]$UserId)
     try {
@@ -431,6 +436,7 @@ function Get-PerUserMfaState {
 function Resolve-AuthMethodName { param([string]$Method) switch ($Method) { 'push' { return 'Microsoft Authenticator notification' } 'sms' { return 'SMS' } 'voiceMobile' { return 'Phone call (mobile)' } 'voiceAlternateMobile' { return 'Phone call (alternate mobile)' } 'voiceOffice' { return 'Phone call (office)' } 'oath' { return 'OATH token' } 'unknownFutureValue' { return 'Unknown future value' } 'Unavailable' { return 'Unavailable' } default { return $Method } } }
 function Get-UserSignInMethodView { param([Parameter(Mandatory = $true)][string]$UserId) $result = [PSCustomObject]@{ SignInMode = 'Unknown'; UserDefaultSignInMethod = 'Unavailable'; SystemPreferredEnabled = $null }; try { $prefs = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/users/$UserId/authentication/signInPreferences" -OutputType PSObject -ErrorAction Stop; $isSystemPreferred = $null; $userMethod = $null; if ($prefs.PSObject.Properties.Name -contains 'isSystemPreferredAuthenticationMethodEnabled') { $isSystemPreferred = $prefs.isSystemPreferredAuthenticationMethodEnabled } elseif ($prefs.PSObject.Properties.Name -contains 'IsSystemPreferredAuthenticationMethodEnabled') { $isSystemPreferred = $prefs.IsSystemPreferredAuthenticationMethodEnabled } elseif ($prefs.PSObject.Properties.Name -contains 'AdditionalProperties' -and $null -ne $prefs.AdditionalProperties -and $prefs.AdditionalProperties.ContainsKey('isSystemPreferredAuthenticationMethodEnabled')) { $isSystemPreferred = $prefs.AdditionalProperties['isSystemPreferredAuthenticationMethodEnabled'] }; if ($prefs.PSObject.Properties.Name -contains 'userPreferredMethodForSecondaryAuthentication') { $userMethod = $prefs.userPreferredMethodForSecondaryAuthentication } elseif ($prefs.PSObject.Properties.Name -contains 'UserPreferredMethodForSecondaryAuthentication') { $userMethod = $prefs.UserPreferredMethodForSecondaryAuthentication } elseif ($prefs.PSObject.Properties.Name -contains 'AdditionalProperties' -and $null -ne $prefs.AdditionalProperties -and $prefs.AdditionalProperties.ContainsKey('userPreferredMethodForSecondaryAuthentication')) { $userMethod = $prefs.AdditionalProperties['userPreferredMethodForSecondaryAuthentication'] }; if ($null -ne $isSystemPreferred) { $result.SystemPreferredEnabled = [bool]$isSystemPreferred }; if (-not [string]::IsNullOrWhiteSpace([string]$userMethod)) { $result.UserDefaultSignInMethod = Resolve-AuthMethodName -Method ([string]$userMethod) }; if ($isSystemPreferred -eq $true) { $result.SignInMode = 'SystemPreferred' } elseif ($null -ne $isSystemPreferred -and $isSystemPreferred -eq $false) { $result.SignInMode = 'UserPreferred' } } catch { } return $result }
 
+# User and registration lookup helpers retrieve targeted users and map authentication registration report rows by user ID.
 function Get-TargetedUsers {
     param([Parameter(Mandatory = $true)][string[]]$UpnFilter)
     $users = [System.Collections.Generic.List[object]]::new()
@@ -479,6 +485,7 @@ function Get-RegistrationLookup {
 
     return $registrationLookup
 }
+# Export helper writes audit results to Excel when available, otherwise CSV, and always creates a TXT detail output.
 function Export-AuditResults {
     param(
         [Parameter(Mandatory = $true)][object[]]$Results,
@@ -523,7 +530,6 @@ function Export-AuditResults {
         $csvPath = Join-Path $OutputFolder "$baseName.csv"
         $Results | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
 
-# ImportExcel is optional and enables native Excel export when available.
         Write-Host "`nImportExcel module not found. Exported CSV: $csvPath" -ForegroundColor Yellow
 
     }
@@ -531,6 +537,7 @@ function Export-AuditResults {
     $Results | Format-List * | Out-String -Width 4096 | Set-Content -Path $txtPath -Encoding UTF8
     Write-Host "Exported text: $txtPath" -ForegroundColor Green
 }
+# Main audit workflow retrieves users, gathers authentication data, evaluates readiness, and exports results.
 function Run-Audit {
     param(
         [string]$Mode = 'Full',
@@ -675,6 +682,7 @@ $sorted = @($results | Sort-Object UserPrincipalName)
     Write-Host "`nAudit complete. Results exported." -ForegroundColor Green
 }
 
+# Audit submenu lets the operator choose sample, full tenant, or targeted UPN audit modes.
 function Show-AuditSubMenu {
     param([Parameter(Mandatory = $true)][ValidateSet('Enabled','All')][string]$AccountScope)
 
