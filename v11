@@ -1,5 +1,6 @@
 #AI Commented
 #add "MFA Ready"
+#add Group Filtering
 <#Disclaimer
 The sample scripts are not supported under any Microsoft standard support program or service.
 The sample scripts are provided AS IS without warranty of any kind. Microsoft further disclaims all implied warranties
@@ -209,7 +210,7 @@ function Get-UpnFilter {
         Write-Host "Enter one or more valid UPNs, or * to cancel." -ForegroundColor Red
     }
 }
-function Get-GroupObjectIdFilter { while ($true) { Write-Host ""; Write-Host "Specific group object ID filter" -ForegroundColor Cyan; Write-Host "Examples:"; Write-Host "  00000000-0000-0000-0000-000000000000"; Write-Host "  00000000-0000-0000-0000-000000000000,11111111-1111-1111-1111-111111111111"; Write-Host "  *   (cancel / none)"; $inputValue = Read-Host "Enter one or more group object IDs"; if ([string]::IsNullOrWhiteSpace($inputValue) -or $inputValue -eq '*') { return @() }; $groupIds = $inputValue.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique; if (@($groupIds).Count -gt 0) { return @($groupIds) }; Write-Host "Enter one or more valid group object IDs, or * to cancel." -ForegroundColor Red } }
+function Get-GroupObjectIdFilter { while ($true) { Write-Host ""; Write-Host "Specific group object ID filter" -ForegroundColor Cyan; Write-Host "Examples:"; Write-Host "  00000000-0000-0000-0000-000000000000"; Write-Host "  00000000-0000-0000-0000-000000000000,11111111-1111-1111-1111-111111111111"; Write-Host "  *   (cancel / none)"; $inputValue = Read-Host "Enter one or more group object IDs"; if ([string]::IsNullOrWhiteSpace($inputValue) -or $inputValue -eq '*') { return @() }; $groupIds = $inputValue.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique; if (@($groupIds).Count -gt 0) { return @($groupIds) }; Write-Host "Enter one or more group object IDs, or * to cancel." -ForegroundColor Red } }
 # Phone method helper functions normalize phone types and determine whether mobile SMS/voice is available.
 function Get-UserPhoneSummary {param([Parameter()][object[]]$PhoneMethods = @())$phoneTypes = [System.Collections.Generic.List[string]]::new();$phoneNumbers = [System.Collections.Generic.List[string]]::new();$hasMobile = $false;$hasAlternateMobile = $false;$hasOffice = $false;foreach ($phone in @($PhoneMethods)) {$phoneType = $null;if ($phone.PSObject.Properties.Name -contains 'PhoneType' -and $null -ne $phone.PhoneType) {$phoneType = [string]$phone.PhoneType}elseif ($phone.PSObject.Properties.Name -contains 'AdditionalProperties' -and $null -ne $phone.AdditionalProperties -and $phone.AdditionalProperties.ContainsKey('phoneType')) {$phoneType = [string]$phone.AdditionalProperties['phoneType']}elseif ($script:PhoneTypeMap.ContainsKey([string]$phone.Id)) {$phoneType = $script:PhoneTypeMap[[string]$phone.Id]}if ([string]::IsNullOrWhiteSpace($phoneType)) {$phoneType = 'Unknown'}$phoneTypes.Add($phoneType);switch ($phoneType) {'mobile' {$hasMobile = $true}'alternateMobile' {$hasAlternateMobile = $true}'office' {$hasOffice = $true}}if ($phone.PSObject.Properties.Name -contains 'PhoneNumber' -and -not [string]::IsNullOrWhiteSpace([string]$phone.PhoneNumber)) {$phoneNumbers.Add([string]$phone.PhoneNumber)}}$phoneAccessMode = if ($hasMobile) { 'SMS and voice call (mobile)' } elseif ($hasAlternateMobile -or $hasOffice) { 'Voice call only' } else { 'None' };return [PSCustomObject]@{PhoneTypes = $(if ($phoneTypes.Count -gt 0) { ($phoneTypes | Sort-Object -Unique) -join '; ' } else { 'None' });PhoneNumbers = $(if ($phoneNumbers.Count -gt 0) { ($phoneNumbers | Sort-Object -Unique) -join '; ' } else { '' });PhoneAccessMode = $phoneAccessMode}}
 function Get-SmsMfaCapability {
@@ -693,7 +694,7 @@ $sorted = @($results | Sort-Object UserPrincipalName)
     Write-Host "`nAudit complete. Results exported." -ForegroundColor Green
 }
 
-# Audit submenu lets the operator choose sample, full tenant, or targeted UPN audit modes.
+# Audit submenu lets the operator choose the target scope after selecting Enabled or All accounts.
 function Show-AuditSubMenu {
     param([Parameter(Mandatory = $true)][ValidateSet('Enabled','All')][string]$AccountScope)
 
